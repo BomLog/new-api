@@ -146,6 +146,11 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 			}
 			var toolCalls []dto.ToolCallRequest
 			mediaMessages := make([]dto.MediaContent, 0, len(content))
+			// DeepSeek 等 OpenAI 兼容上游在 thinking 模式下要求历史 assistant
+			// 消息携带 reasoning_content，否则 400
+			// "reasoning_content in the thinking mode must be passed back to the API"。
+			// Claude 客户端把思考内容放在 thinking block 里，转换时不能丢弃。
+			var reasoningContent string
 
 			for _, mediaMsg := range content {
 				switch mediaMsg.Type {
@@ -156,6 +161,12 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 						CacheControl: mediaMsg.CacheControl,
 					}
 					mediaMessages = append(mediaMessages, message)
+				case "thinking":
+					// redacted_thinking 不含可还原的思考文本，跳过；仅 thinking block
+					// 携带原始思考内容，映射为 reasoning_content。
+					if mediaMsg.Thinking != nil {
+						reasoningContent += *mediaMsg.Thinking
+					}
 				case "image":
 					imageData := fmt.Sprintf("data:%s;base64,%s", mediaMsg.Source.MediaType, mediaMsg.Source.Data)
 					mediaMessage := dto.MediaContent{
@@ -194,6 +205,9 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 				}
 			}
 
+			if reasoningContent != "" {
+				openAIMessage.ReasoningContent = kitutil.GetPointer[string](reasoningContent)
+			}
 			if len(toolCalls) > 0 {
 				openAIMessage.SetToolCalls(toolCalls)
 			}
@@ -201,7 +215,7 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 				openAIMessage.SetMediaContent(mediaMessages)
 			}
 		}
-		if len(openAIMessage.ParseContent()) > 0 || len(openAIMessage.ToolCalls) > 0 {
+		if len(openAIMessage.ParseContent()) > 0 || len(openAIMessage.ToolCalls) > 0 || openAIMessage.ReasoningContent != nil {
 			openAIMessages = append(openAIMessages, openAIMessage)
 		}
 	}
