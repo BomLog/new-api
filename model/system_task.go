@@ -25,6 +25,7 @@ const (
 	SystemTaskTypeMidjourneyPoll = "midjourney_poll"
 	SystemTaskTypeAsyncTaskPoll  = "async_task_poll"
 	SystemTaskTypeChannelBalance = "channel_balance"
+	SystemTaskTypeChannelProbe   = "channel_probe"
 	SystemTaskTypeCleanup        = "system_task_cleanup"
 
 	systemTaskCleanupBatchSize = 500

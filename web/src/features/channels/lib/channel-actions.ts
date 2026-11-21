@@ -62,6 +62,17 @@ export const channelsQueryKeys = {
     [...channelsQueryKeys.detail(id), 'plugin_credentials'] as const,
 }
 
+function invalidateChannelAndCatalogQueries(queryClient?: QueryClient): void {
+  if (!queryClient) return
+  void Promise.all([
+    queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() }),
+    queryClient.invalidateQueries({ queryKey: ['pricing'] }),
+    queryClient.invalidateQueries({ queryKey: ['user-groups'] }),
+    queryClient.invalidateQueries({ queryKey: ['user-models'] }),
+    queryClient.invalidateQueries({ queryKey: ['token-auto-groups'] }),
+  ])
+}
+
 function getChannelTestResponseTime(
   response: ChannelTestResponse
 ): number | undefined {
@@ -132,7 +143,7 @@ export async function handleEnableChannel(
     const response = await updateChannelStatus(id, CHANNEL_STATUS.ENABLED)
     if (response.success) {
       toast.success(i18next.t(SUCCESS_MESSAGES.ENABLED))
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      invalidateChannelAndCatalogQueries(queryClient)
       onSuccess?.()
     } else {
       handleServerError(response, i18next.t(ERROR_MESSAGES.UPDATE_FAILED))
@@ -157,7 +168,7 @@ export async function handleDisableChannel(
     )
     if (response.success) {
       toast.success(i18next.t(SUCCESS_MESSAGES.DISABLED))
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      invalidateChannelAndCatalogQueries(queryClient)
       onSuccess?.()
     } else {
       handleServerError(response, i18next.t(ERROR_MESSAGES.UPDATE_FAILED))
@@ -195,7 +206,7 @@ export async function handleDeleteChannel(
     const response = await deleteChannel(id)
     if (response.success) {
       toast.success(i18next.t(SUCCESS_MESSAGES.DELETED))
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      invalidateChannelAndCatalogQueries(queryClient)
       onSuccess?.()
     } else {
       handleServerError(response, i18next.t(ERROR_MESSAGES.DELETE_FAILED))
@@ -227,7 +238,7 @@ export async function handleUpdateChannelField(
           value,
         })
       )
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      invalidateChannelAndCatalogQueries(queryClient)
       onSuccess?.()
     } else {
       handleServerError(response, i18next.t(ERROR_MESSAGES.UPDATE_FAILED))
@@ -261,7 +272,7 @@ export async function handleUpdateTagField(
           tag,
         })
       )
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      invalidateChannelAndCatalogQueries(queryClient)
       onSuccess?.()
     } else {
       handleServerError(response, i18next.t(ERROR_MESSAGES.UPDATE_FAILED))
@@ -362,7 +373,7 @@ export async function handleCopyChannel(
     const response = await copyChannel(id, params)
     if (response.success) {
       toast.success(i18next.t(SUCCESS_MESSAGES.COPIED))
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      invalidateChannelAndCatalogQueries(queryClient)
       onSuccess?.(response.data?.id ?? 0)
     } else {
       handleServerError(response, i18next.t('Failed to copy channel'))
@@ -397,7 +408,7 @@ export async function handleBatchDelete(
           count: response.data || ids.length,
         })
       )
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      invalidateChannelAndCatalogQueries(queryClient)
       onSuccess?.(response.data || ids.length)
     } else {
       handleServerError(response, i18next.t(ERROR_MESSAGES.DELETE_FAILED))
@@ -429,7 +440,7 @@ export async function handleBatchEnable(
       toast.success(
         i18next.t('{{count}} channel(s) enabled', { count: successCount })
       )
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      invalidateChannelAndCatalogQueries(queryClient)
       onSuccess?.()
     }
 
@@ -470,7 +481,7 @@ export async function handleBatchDisable(
       toast.success(
         i18next.t('{{count}} channel(s) disabled', { count: successCount })
       )
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      invalidateChannelAndCatalogQueries(queryClient)
       onSuccess?.()
     }
 
@@ -506,7 +517,7 @@ export async function handleBatchSetTag(
     const response = await batchSetChannelTag({ ids, tag })
     if (response.success) {
       toast.success(i18next.t(SUCCESS_MESSAGES.TAG_SET))
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      invalidateChannelAndCatalogQueries(queryClient)
       onSuccess?.()
     } else {
       handleServerError(response, i18next.t('Failed to set tag'))
@@ -534,7 +545,7 @@ export async function handleEnableTagChannels(
       toast.success(
         i18next.t('Enabled all channels with tag: {{tag}}', { tag })
       )
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      invalidateChannelAndCatalogQueries(queryClient)
       onSuccess?.()
     } else {
       handleServerError(response, i18next.t('Failed to enable tag channels'))
@@ -558,7 +569,7 @@ export async function handleDisableTagChannels(
       toast.success(
         i18next.t('Disabled all channels with tag: {{tag}}', { tag })
       )
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      invalidateChannelAndCatalogQueries(queryClient)
       onSuccess?.()
     } else {
       handleServerError(response, i18next.t('Failed to disable tag channels'))
@@ -587,7 +598,7 @@ export async function handleDeleteAllDisabled(
           count: response.data || 0,
         })
       )
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      invalidateChannelAndCatalogQueries(queryClient)
       onSuccess?.(response.data || 0)
     } else {
       handleServerError(
@@ -619,7 +630,7 @@ export async function handleFixAbilities(
           }
         )
       )
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      invalidateChannelAndCatalogQueries(queryClient)
       onSuccess?.(response.data)
     } else {
       handleServerError(
@@ -647,7 +658,7 @@ export async function handleTestAllChannels(
           'Testing all enabled channels started. Please refresh to see results.'
         )
       )
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      invalidateChannelAndCatalogQueries(queryClient)
       onSuccess?.()
     } else {
       handleServerError(
@@ -676,7 +687,7 @@ async function followBalanceUpdate(
   queryClient?: QueryClient
 ): Promise<void> {
   const reloadList = () =>
-    queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+    invalidateChannelAndCatalogQueries(queryClient)
   let reloadedAt = 0
   for (;;) {
     await new Promise((resolve) => setTimeout(resolve, BALANCE_UPDATE_POLL_MS))

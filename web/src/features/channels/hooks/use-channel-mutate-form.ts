@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -59,6 +59,7 @@ const SENSITIVE_UPDATE_FIELDS = [
 
 export function useChannelMutateForm(props: UseChannelMutateFormParams) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const currentUser = useAuthStore((s) => s.auth.user)
   const canEditSensitive = hasPermission(
     currentUser,
@@ -118,6 +119,12 @@ export function useChannelMutateForm(props: UseChannelMutateFormParams) {
       }
     },
     onSuccess: (result) => {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['pricing'] }),
+        queryClient.invalidateQueries({ queryKey: ['user-groups'] }),
+        queryClient.invalidateQueries({ queryKey: ['user-models'] }),
+        queryClient.invalidateQueries({ queryKey: ['token-auto-groups'] }),
+      ])
       toast.success(t(result.messageKey))
       props.onSuccess()
     },

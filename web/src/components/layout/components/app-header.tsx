@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { ConfigDrawer } from '@/components/config-drawer'
+import { CustomButtonsQuickTrigger } from '@/components/custom-nav-buttons'
 import { LanguageSwitcher } from '@/components/language-switcher'
 import { NotificationPopover } from '@/components/notification-popover'
 import { ProfileDropdown } from '@/components/profile-dropdown'
@@ -125,8 +126,9 @@ export function AppHeader({
       {rightContent ?? (
         <div className='ms-auto flex shrink-0 items-center gap-1 sm:gap-2'>
           {showTopNav && (
-            <div className='me-1 hidden lg:block'>
+            <div className='me-1 hidden items-center gap-2 lg:flex'>
               <TopNav links={links} />
+              <CustomButtonsQuickTrigger defaultPlacement='header' />
             </div>
           )}
           {showSearch && (

@@ -183,7 +183,7 @@ export function Features(_props: FeaturesProps) {
     <section className='relative z-10 px-6 py-24 md:py-32'>
       <div className='mx-auto max-w-6xl'>
         <AnimateInView className='mb-16 max-w-lg'>
-          <p className='text-muted-foreground mb-3 text-xs font-medium tracking-widest uppercase'>
+          <p className='mb-3 font-mono text-xs font-medium tracking-widest text-sky-300 uppercase'>
             {t('Core Features')}
           </p>
           <h2 className='text-2xl leading-tight font-bold tracking-tight md:text-3xl'>
@@ -194,16 +194,16 @@ export function Features(_props: FeaturesProps) {
         </AnimateInView>
 
         {/* Bento grid */}
-        <div className='border-border/40 bg-border/40 grid gap-px overflow-hidden rounded-xl border md:grid-cols-3'>
+        <div className='grid gap-4 md:grid-cols-3'>
           {features.map((f, i) => (
             <AnimateInView
               key={f.id}
               delay={i * 100}
               animation='scale-in'
-              className={`bg-background group hover:bg-muted/20 p-7 transition-colors duration-300 md:p-8 ${f.span}`}
+              className={`space-panel group p-7 transition-transform duration-300 hover:-translate-y-1 md:p-8 ${f.span}`}
             >
               <div className='mb-3 flex items-center gap-3'>
-                <span className='border-border/40 bg-muted text-muted-foreground flex size-7 items-center justify-center rounded-md border text-[10px] font-semibold tabular-nums'>
+                <span className='flex size-7 items-center justify-center rounded-md border border-sky-300/30 bg-sky-400/10 font-mono text-[10px] font-semibold text-sky-200 tabular-nums'>
                   {f.num}
                 </span>
                 <h3 className='text-sm font-semibold'>{f.title}</h3>
@@ -225,7 +225,7 @@ export function Features(_props: FeaturesProps) {
               animation='fade-up'
               className='flex flex-col items-center text-center'
             >
-              <div className='text-muted-foreground border-border/50 bg-muted/30 group-hover:text-foreground mb-3 flex size-12 items-center justify-center rounded-xl border transition-colors'>
+              <div className='mb-3 flex size-12 items-center justify-center rounded-xl border border-violet-300/30 bg-violet-400/10 text-violet-200 shadow-[0_0_24px_-8px_oklch(0.7_0.17_290/80%)]'>
                 {f.icon}
               </div>
               <h3 className='mb-1.5 text-sm font-semibold'>{f.title}</h3>

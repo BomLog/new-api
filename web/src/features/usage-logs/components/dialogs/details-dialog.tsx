@@ -77,6 +77,8 @@ import { AuditDetailFields } from '../../audit/components/audit-detail-fields'
 import type { UsageLog } from '../../data/schema'
 import {
   parseLogOther,
+  getCacheHitRateBadgeClass,
+  getCacheHitRateMetrics,
   getParamOverrideActionLabel,
   parseAuditLine,
   decodeBillingExprB64,
@@ -493,11 +495,53 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
     })
   }
 
+  const cacheMetrics = getCacheHitRateMetrics(promptTokens, other)
+  let cacheBarClass = 'bg-muted-foreground/40'
+  if (cacheMetrics.tone === 'excellent') {
+    cacheBarClass = 'bg-emerald-500'
+  } else if (cacheMetrics.tone === 'good') {
+    cacheBarClass = 'bg-sky-500'
+  } else if (cacheMetrics.tone === 'fair') {
+    cacheBarClass = 'bg-amber-500'
+  } else if (cacheMetrics.tone === 'low') {
+    cacheBarClass = 'bg-rose-500'
+  }
+
   return (
     <DetailSection label={t('Token Breakdown')}>
       {rows.map((row) => (
         <DetailRow key={row.label} label={row.label} value={row.value} mono />
       ))}
+      {cacheMetrics.formattedPercent && cacheMetrics.hitRatePercent != null && (
+        <div
+          data-slot='detail-cache-hit-rate'
+          className='border-border/60 bg-muted/20 space-y-1.5 rounded-lg border px-2.5 py-2'
+        >
+          <div className='flex items-center justify-between gap-2 text-xs'>
+            <span className='text-muted-foreground'>{t('Cache Hit Rate')}</span>
+            <span className='flex items-center gap-1.5 font-mono tabular-nums'>
+              <span className='text-muted-foreground text-[11px]'>
+                {cacheMetrics.cacheReadTokens.toLocaleString()} /{' '}
+                {cacheMetrics.totalInputTokens.toLocaleString()}
+              </span>
+              <span
+                className={cn(
+                  'inline-flex h-5 items-center rounded border px-1.5 text-xs font-semibold',
+                  getCacheHitRateBadgeClass(cacheMetrics.tone)
+                )}
+              >
+                {cacheMetrics.formattedPercent}
+              </span>
+            </span>
+          </div>
+          <div className='bg-muted h-1.5 w-full overflow-hidden rounded-full'>
+            <div
+              className={cn('h-full rounded-full transition-all', cacheBarClass)}
+              style={{ width: `${cacheMetrics.hitRatePercent}%` }}
+            />
+          </div>
+        </div>
+      )}
       {other.billing_tokens && (
         <div
           role='group'

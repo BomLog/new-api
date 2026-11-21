@@ -19,17 +19,16 @@ For commercial licensing, please contact support@quantumnous.com
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import type { TopNavLink } from '@/components/layout/types'
 import { useStatus } from '@/hooks/use-status'
-import { parseHeaderNavModulesFromStatus } from '@/lib/nav-modules'
+import {
+  getCustomButtonsForPlacement,
+  isExternalCustomHref,
+  parseHeaderNavModulesFromStatus,
+} from '@/lib/nav-modules'
 import { useAuthStore } from '@/stores/auth-store'
 
-export type TopNavLink = {
-  title: string
-  href: string
-  disabled?: boolean
-  requiresAuth?: boolean
-  external?: boolean
-}
+export type { TopNavLink }
 
 /**
  * Generate top navigation links based on HeaderNavModules configuration from backend /api/status
@@ -98,6 +97,20 @@ export function useTopNavLinks(): TopNavLink[] {
   // About
   if (modules?.about !== false) {
     links.push({ title: t('About'), href: '/about' })
+  }
+
+  // Custom buttons configured for header navigation (Home + Console bar)
+  const customHeaderButtons = getCustomButtonsForPlacement(modules, 'header')
+  for (const button of customHeaderButtons) {
+    links.push({
+      id: button.id,
+      title: button.label,
+      href: button.href,
+      external: button.openInNewTab || isExternalCustomHref(button.href),
+      requiresAuth: button.requireAuth && !isAuthed,
+      isCustom: true,
+      buttonVariant: button.variant,
+    })
   }
 
   return links

@@ -99,7 +99,16 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 	return rootUser.Id, nil
 }
 
+type channelTestCustomOptions struct {
+	Prompt    string
+	MaxTokens uint
+}
+
 func testChannel(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) testResult {
+	return testChannelWithOptions(ctx, channel, testUserID, testModel, endpointType, isStream, channelTestCustomOptions{})
+}
+
+func testChannelWithOptions(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool, customOpts channelTestCustomOptions) testResult {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -270,7 +279,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		}
 	}
 
-	request := buildTestRequest(testModel, endpointType, channel, isStream)
+	request := buildTestRequestWithOptions(testModel, endpointType, channel, isStream, customOpts)
 
 	info, err := relaycommon.GenRelayInfo(c, relayFormat, request, nil)
 
@@ -743,42 +752,73 @@ func detectErrorMessageFromJSONBytes(jsonBytes []byte) string {
 }
 
 func buildTestRequest(model string, endpointType string, channel *model.Channel, isStream bool) dto.Request {
+	return buildTestRequestWithOptions(model, endpointType, channel, isStream, channelTestCustomOptions{})
+}
+
+func buildTestRequestWithOptions(model string, endpointType string, channel *model.Channel, isStream bool, customOpts channelTestCustomOptions) dto.Request {
+	prompt := strings.TrimSpace(customOpts.Prompt)
+	if prompt == "" {
+		prompt = "hi"
+	}
 	testResponsesInput := json.RawMessage(`[{"role":"user","content":"hi"}]`)
+	if prompt != "hi" {
+		if encoded, err := common.Marshal([]map[string]string{{"role": "user", "content": prompt}}); err == nil {
+			testResponsesInput = json.RawMessage(encoded)
+		}
+	}
+
+	resolveMaxTokens := func(defaultVal uint) *uint {
+		if customOpts.MaxTokens > 0 {
+			return lo.ToPtr(customOpts.MaxTokens)
+		}
+		return lo.ToPtr(defaultVal)
+	}
 
 	// 根据端点类型构建不同的测试请求
 	if endpointType != "" {
 		switch constant.EndpointType(endpointType) {
 		case constant.EndpointTypeEmbeddings:
-			// 返回 EmbeddingRequest
+			embedInput := "hello world"
+			if strings.TrimSpace(customOpts.Prompt) != "" {
+				embedInput = prompt
+			}
 			return &dto.EmbeddingRequest{
 				Model: model,
-				Input: []any{"hello world"},
+				Input: []any{embedInput},
 			}
 		case constant.EndpointTypeImageGeneration:
-			// 返回 ImageRequest
+			imagePrompt := "a cute cat"
+			if strings.TrimSpace(customOpts.Prompt) != "" {
+				imagePrompt = prompt
+			}
 			return &dto.ImageRequest{
 				Model:  model,
-				Prompt: "a cute cat",
+				Prompt: imagePrompt,
 				N:      lo.ToPtr(uint(1)),
 				Size:   "1024x1024",
 			}
 		case constant.EndpointTypeJinaRerank:
-			// 返回 RerankRequest
+			rerankQuery := "What is Deep Learning?"
+			if strings.TrimSpace(customOpts.Prompt) != "" {
+				rerankQuery = prompt
+			}
 			return &dto.RerankRequest{
 				Model:     model,
-				Query:     "What is Deep Learning?",
+				Query:     rerankQuery,
 				Documents: []any{"Deep Learning is a subset of machine learning.", "Machine learning is a field of artificial intelligence."},
 				TopN:      lo.ToPtr(2),
 			}
 		case constant.EndpointTypeOpenAIResponse:
-			// 返回 OpenAIResponsesRequest
-			return &dto.OpenAIResponsesRequest{
+			req := &dto.OpenAIResponsesRequest{
 				Model:  model,
-				Input:  json.RawMessage(`[{"role":"user","content":"hi"}]`),
+				Input:  testResponsesInput,
 				Stream: lo.ToPtr(isStream),
 			}
+			if customOpts.MaxTokens > 0 {
+				req.MaxOutputTokens = lo.ToPtr(customOpts.MaxTokens)
+			}
+			return req
 		case constant.EndpointTypeOpenAIResponseCompact:
-			// 返回 OpenAIResponsesCompactionRequest
 			return &dto.OpenAIResponsesCompactionRequest{
 				Model: model,
 				Input: testResponsesInput,
@@ -787,11 +827,11 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 			return &dto.ClaudeRequest{
 				Model:     model,
 				Stream:    lo.ToPtr(isStream),
-				MaxTokens: lo.ToPtr(uint(16)),
+				MaxTokens: resolveMaxTokens(16),
 				Messages: []dto.ClaudeMessage{
 					{
 						Role:    "user",
-						Content: "hi",
+						Content: prompt,
 					},
 				},
 			}
@@ -800,11 +840,11 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 				Contents: []dto.GeminiChatContent{
 					{
 						Role:  "user",
-						Parts: []dto.GeminiPart{{Text: "hi"}},
+						Parts: []dto.GeminiPart{{Text: prompt}},
 					},
 				},
 				GenerationConfig: dto.GeminiChatGenerationConfig{
-					MaxOutputTokens: lo.ToPtr(uint(3000)),
+					MaxOutputTokens: resolveMaxTokens(3000),
 				},
 			}
 		case constant.EndpointTypeOpenAI:
@@ -814,10 +854,10 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 				Messages: []dto.Message{
 					{
 						Role:    "user",
-						Content: "hi",
+						Content: prompt,
 					},
 				},
-				MaxTokens: lo.ToPtr(uint(16)),
+				MaxTokens: resolveMaxTokens(16),
 			}
 			if isStream {
 				req.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
@@ -828,9 +868,13 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 
 	// 自动检测逻辑（保持原有行为）
 	if strings.Contains(strings.ToLower(model), "rerank") {
+		rerankQuery := "What is Deep Learning?"
+		if strings.TrimSpace(customOpts.Prompt) != "" {
+			rerankQuery = prompt
+		}
 		return &dto.RerankRequest{
 			Model:     model,
-			Query:     "What is Deep Learning?",
+			Query:     rerankQuery,
 			Documents: []any{"Deep Learning is a subset of machine learning.", "Machine learning is a field of artificial intelligence."},
 			TopN:      lo.ToPtr(2),
 		}
@@ -840,20 +884,27 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 	if strings.Contains(strings.ToLower(model), "embedding") ||
 		strings.HasPrefix(model, "m3e") ||
 		strings.Contains(model, "bge-") {
-		// 返回 EmbeddingRequest
+		embedInput := "hello world"
+		if strings.TrimSpace(customOpts.Prompt) != "" {
+			embedInput = prompt
+		}
 		return &dto.EmbeddingRequest{
 			Model: model,
-			Input: []any{"hello world"},
+			Input: []any{embedInput},
 		}
 	}
 
 	// Responses-only models (e.g. codex series)
 	if strings.Contains(strings.ToLower(model), "codex") {
-		return &dto.OpenAIResponsesRequest{
+		req := &dto.OpenAIResponsesRequest{
 			Model:  model,
-			Input:  json.RawMessage(`[{"role":"user","content":"hi"}]`),
+			Input:  testResponsesInput,
 			Stream: lo.ToPtr(isStream),
 		}
+		if customOpts.MaxTokens > 0 {
+			req.MaxOutputTokens = lo.ToPtr(customOpts.MaxTokens)
+		}
+		return req
 	}
 
 	// Chat/Completion 请求 - 返回 GeneralOpenAIRequest
@@ -863,7 +914,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 		Messages: []dto.Message{
 			{
 				Role:    "user",
-				Content: "hi",
+				Content: prompt,
 			},
 		},
 	}
@@ -872,15 +923,17 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 	}
 
 	if dto.IsOpenAIReasoningOModel(model) {
-		testRequest.MaxCompletionTokens = lo.ToPtr(uint(16))
+		testRequest.MaxCompletionTokens = resolveMaxTokens(16)
 	} else if strings.Contains(model, "thinking") {
-		if !strings.Contains(model, "claude") {
+		if customOpts.MaxTokens > 0 {
+			testRequest.MaxTokens = lo.ToPtr(customOpts.MaxTokens)
+		} else if !strings.Contains(model, "claude") {
 			testRequest.MaxTokens = lo.ToPtr(uint(50))
 		}
 	} else if strings.Contains(model, "gemini") {
-		testRequest.MaxTokens = lo.ToPtr(uint(3000))
+		testRequest.MaxTokens = resolveMaxTokens(3000)
 	} else {
-		testRequest.MaxTokens = lo.ToPtr(uint(16))
+		testRequest.MaxTokens = resolveMaxTokens(16)
 	}
 
 	return testRequest

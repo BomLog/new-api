@@ -58,6 +58,8 @@ import type { UsageLog } from '../../data/schema'
 import {
   formatModelName,
   decodeBillingExprB64,
+  getCacheHitRateMetrics,
+  getCacheHitRateTextClass,
   getTieredBillingSummary,
   hasAnyCacheTokens,
   parseLogOther,
@@ -740,17 +742,19 @@ export function useCommonLogsColumns(
 
           const promptTokens = log.prompt_tokens || 0
           const completionTokens = log.completion_tokens || 0
-          if (promptTokens === 0 && completionTokens === 0) {
+          const { cacheReadTokens, cacheWriteTokens } = getCacheHitRateMetrics(
+            promptTokens,
+            other
+          )
+
+          if (
+            promptTokens === 0 &&
+            completionTokens === 0 &&
+            cacheReadTokens === 0 &&
+            cacheWriteTokens === 0
+          ) {
             return <span className='text-muted-foreground text-xs'>-</span>
           }
-
-          const cacheReadTokens = other?.cache_tokens || 0
-          const cacheWrite5m = other?.cache_creation_tokens_5m || 0
-          const cacheWrite1h = other?.cache_creation_tokens_1h || 0
-          const hasSplitCache = cacheWrite5m > 0 || cacheWrite1h > 0
-          const cacheWriteTokens = hasSplitCache
-            ? cacheWrite5m + cacheWrite1h
-            : other?.cache_creation_tokens || 0
 
           return (
             <div className='flex flex-col gap-0.5'>
@@ -761,12 +765,12 @@ export function useCommonLogsColumns(
               {(cacheReadTokens > 0 || cacheWriteTokens > 0) && (
                 <div className='flex items-center gap-1 text-[11px]'>
                   {cacheReadTokens > 0 && (
-                    <span className='text-muted-foreground/60'>
+                    <span className='text-muted-foreground/60 tabular-nums'>
                       {t('Cache')}↓ {cacheReadTokens.toLocaleString()}
                     </span>
                   )}
                   {cacheWriteTokens > 0 && (
-                    <span className='text-muted-foreground/60'>
+                    <span className='text-muted-foreground/60 tabular-nums'>
                       ↑ {cacheWriteTokens.toLocaleString()}
                     </span>
                   )}
@@ -775,6 +779,50 @@ export function useCommonLogsColumns(
             </div>
           )
         },
+      },
+      {
+        id: 'cache_hit_rate',
+        header: t('Cache Hit Rate'),
+        accessorFn: (row) => {
+          const other = parseLogOther(row.other)
+          return (
+            getCacheHitRateMetrics(row.prompt_tokens || 0, other)
+              .hitRatePercent ?? 0
+          )
+        },
+        cell: ({ row }) => {
+          const log = row.original
+          if (!isDisplayableLogType(log.type)) return null
+
+          const other = parseLogOther(log.other)
+          const {
+            cacheReadTokens,
+            totalInputTokens,
+            formattedPercent,
+            tone,
+          } = getCacheHitRateMetrics(log.prompt_tokens || 0, other)
+
+          const displayPercent = formattedPercent ?? '0%'
+          const tooltipText =
+            totalInputTokens > 0
+              ? `${t('Cache Hit Rate')}: ${displayPercent} (${cacheReadTokens.toLocaleString()} / ${totalInputTokens.toLocaleString()})`
+              : `${t('Cache Hit Rate')}: 0%`
+
+          return (
+            <span
+              data-slot='cache-hit-rate-cell'
+              title={tooltipText}
+              className={cn(
+                'font-mono text-xs tabular-nums',
+                getCacheHitRateTextClass(formattedPercent ? tone : 'zero')
+              )}
+            >
+              {displayPercent}
+            </span>
+          )
+        },
+        meta: { label: t('Cache Hit Rate') },
+        size: 96,
       },
       {
         accessorKey: 'quota',

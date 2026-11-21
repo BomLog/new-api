@@ -346,6 +346,120 @@ export function hasAnyCacheTokens(
   )
 }
 
+export type CacheHitRateTone = 'excellent' | 'good' | 'fair' | 'low' | 'zero'
+
+export type CacheHitRateMetrics = {
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  totalInputTokens: number
+  hitRatePercent: number | null
+  formattedPercent: string | null
+  tone: CacheHitRateTone
+}
+
+/**
+ * Computes normalized cache read/write totals and actual cache hit percentage
+ * (`cacheReadTokens / totalInputTokens * 100`) across both OpenAI-style
+ * (cache_tokens included in prompt_tokens) and Claude/Anthropic-style
+ * (cache tokens reported separately) usage semantics.
+ */
+export function getCacheHitRateMetrics(
+  promptTokens: number,
+  other: LogOtherData | null | undefined
+): CacheHitRateMetrics {
+  const safePrompt =
+    Number.isFinite(promptTokens) && promptTokens > 0 ? promptTokens : 0
+  const cacheReadTokens = Math.max(0, other?.cache_tokens || 0)
+  const cacheWrite5m = Math.max(0, other?.cache_creation_tokens_5m || 0)
+  const cacheWrite1h = Math.max(0, other?.cache_creation_tokens_1h || 0)
+  const splitCacheWrite = cacheWrite5m + cacheWrite1h
+  let cacheWriteTokens = Math.max(0, other?.cache_creation_tokens || 0)
+  if ((other?.cache_write_tokens || 0) > 0) {
+    cacheWriteTokens = Math.max(0, other?.cache_write_tokens || 0)
+  } else if (splitCacheWrite > 0) {
+    cacheWriteTokens = Math.max(cacheWriteTokens, splitCacheWrite)
+  }
+
+  const isClaudeSemantic =
+    other?.claude === true || other?.usage_semantic === 'anthropic'
+
+  let totalInputTokens = safePrompt
+  if ((other?.input_tokens_total || 0) > 0) {
+    totalInputTokens = Math.max(other?.input_tokens_total || 0, cacheReadTokens)
+  } else if (isClaudeSemantic) {
+    totalInputTokens = safePrompt + cacheReadTokens + cacheWriteTokens
+  } else if (cacheReadTokens > safePrompt) {
+    // Fallback when an upstream reports Claude-style separate cache counts
+    // without flagging claude=true.
+    totalInputTokens = safePrompt + cacheReadTokens + cacheWriteTokens
+  }
+
+  if (totalInputTokens <= 0) {
+    return {
+      cacheReadTokens,
+      cacheWriteTokens,
+      totalInputTokens,
+      hitRatePercent: null,
+      formattedPercent: null,
+      tone: 'zero',
+    }
+  }
+
+  const rawPercent = Math.min(100, (cacheReadTokens / totalInputTokens) * 100)
+  const rounded = Math.round(rawPercent * 10) / 10
+  const formattedPercent = `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}%`
+
+  let tone: CacheHitRateTone = 'zero'
+  if (rounded >= 80) {
+    tone = 'excellent'
+  } else if (rounded >= 50) {
+    tone = 'good'
+  } else if (rounded >= 20) {
+    tone = 'fair'
+  } else if (rounded > 0) {
+    tone = 'low'
+  }
+
+  return {
+    cacheReadTokens,
+    cacheWriteTokens,
+    totalInputTokens,
+    hitRatePercent: rounded,
+    formattedPercent,
+    tone,
+  }
+}
+
+export function getCacheHitRateTextClass(tone: CacheHitRateTone): string {
+  switch (tone) {
+    case 'excellent':
+      return 'text-emerald-600 dark:text-emerald-400 font-semibold'
+    case 'good':
+      return 'text-sky-600 dark:text-sky-400 font-semibold'
+    case 'fair':
+      return 'text-amber-600 dark:text-amber-400 font-medium'
+    case 'low':
+      return 'text-rose-600 dark:text-rose-400 font-medium'
+    default:
+      return 'text-muted-foreground/65 font-normal'
+  }
+}
+
+export function getCacheHitRateBadgeClass(tone: CacheHitRateTone): string {
+  switch (tone) {
+    case 'excellent':
+      return 'border-emerald-500/30 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'
+    case 'good':
+      return 'border-sky-500/30 bg-sky-500/12 text-sky-700 dark:text-sky-300'
+    case 'fair':
+      return 'border-amber-500/30 bg-amber-500/12 text-amber-700 dark:text-amber-300'
+    case 'low':
+      return 'border-rose-500/30 bg-rose-500/12 text-rose-700 dark:text-rose-300'
+    default:
+      return 'border-border/70 bg-muted/60 text-muted-foreground'
+  }
+}
+
 export function getTieredBillingSummary(
   other: LogOtherData | null,
   modelName?: string

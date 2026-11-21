@@ -16,6 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import {
+  type CustomNavButton,
+  parseCustomNavButtons,
+} from '@/lib/nav-modules'
+
 export type HeaderNavAccessConfig = {
   enabled: boolean
   requireAuth: boolean
@@ -28,7 +33,8 @@ export type HeaderNavModulesConfig = {
   rankings: HeaderNavAccessConfig
   docs: boolean
   about: boolean
-  [key: string]: boolean | HeaderNavAccessConfig
+  customButtons: CustomNavButton[]
+  [key: string]: boolean | HeaderNavAccessConfig | CustomNavButton[]
 }
 
 export type SidebarSectionConfig = {
@@ -51,6 +57,7 @@ export const HEADER_NAV_DEFAULT: HeaderNavModulesConfig = {
   },
   docs: true,
   about: true,
+  customButtons: [],
 }
 
 export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
@@ -100,6 +107,7 @@ const cloneHeaderNavDefault = (): HeaderNavModulesConfig => ({
   ...HEADER_NAV_DEFAULT,
   pricing: { ...HEADER_NAV_DEFAULT.pricing },
   rankings: { ...HEADER_NAV_DEFAULT.rankings },
+  customButtons: [],
 })
 
 const parseAccessModule = (
@@ -159,6 +167,10 @@ export function parseHeaderNavModules(
         result.rankings = parseAccessModule(raw, base.rankings)
         return
       }
+      if (key === 'customButtons') {
+        result.customButtons = parseCustomNavButtons(raw)
+        return
+      }
 
       if (typeof raw === 'boolean') {
         result[key] = raw
@@ -179,7 +191,11 @@ export function parseHeaderNavModules(
 export function serializeHeaderNavModules(
   config: HeaderNavModulesConfig
 ): string {
-  return JSON.stringify(config)
+  const normalized: HeaderNavModulesConfig = {
+    ...config,
+    customButtons: parseCustomNavButtons(config.customButtons),
+  }
+  return JSON.stringify(normalized)
 }
 
 export function parseSidebarModulesAdmin(

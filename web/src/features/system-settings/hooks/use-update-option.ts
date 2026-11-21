@@ -49,6 +49,32 @@ const STATUS_RELATED_KEYS = new Set([
   'passkey.origins',
   'QuotaRemindEnabled',
   'QuotaRemindThreshold',
+  'DefaultUseAutoGroup',
+  'console_setting.uptime_kuma_enabled',
+  'console_setting.channel_probe_enabled',
+  'console_setting.channel_probe_interval_minutes',
+])
+
+const GROUP_PRICING_RELATED_KEYS = new Set([
+  'GroupRatio',
+  'UserUsableGroups',
+  'GroupGroupRatio',
+  'group_ratio_setting.group_special_usable_group',
+  'AutoGroups',
+  'MaxTokenAutoGroups',
+  'DefaultUseAutoGroup',
+  'ModelRatio',
+  'ModelPrice',
+  'CompletionRatio',
+  'CacheRatio',
+  'CreateCacheRatio',
+  'ImageRatio',
+  'AudioRatio',
+  'AudioCompletionRatio',
+  'billing_setting.billing_mode',
+  'billing_setting.billing_expr',
+  'billing_setting.plugin_billing_expr',
+  'HeaderNavModules',
 ])
 
 export function useUpdateOption() {
@@ -70,6 +96,15 @@ export function useUpdateOption() {
           } catch {
             /* empty */
           }
+        }
+
+        if (GROUP_PRICING_RELATED_KEYS.has(variables.key)) {
+          void Promise.all([
+            queryClient.invalidateQueries({ queryKey: ['pricing'] }),
+            queryClient.invalidateQueries({ queryKey: ['user-groups'] }),
+            queryClient.invalidateQueries({ queryKey: ['user-models'] }),
+            queryClient.invalidateQueries({ queryKey: ['token-auto-groups'] }),
+          ])
         }
 
         toast.success(i18next.t('Setting updated successfully'))

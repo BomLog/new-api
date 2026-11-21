@@ -167,19 +167,40 @@ export interface ProcessedFlowData {
 }
 
 // ============================================================================
-// Uptime Monitoring Types
+// Built-in Channel Availability & Probe Monitoring Types
 // ============================================================================
 
+export interface ProbeHeartbeat {
+  t: number
+  ok: boolean
+  ms: number
+}
+
 export interface UptimeMonitor {
+  id?: string
   name: string
+  model?: string
   uptime: number
   status: number
   group?: string
+  avgLatencyMs?: number
+  lastLatencyMs?: number
+  lastCheckedAt?: number
+  totalChecks?: number
+  successChecks?: number
+  heartbeats?: ProbeHeartbeat[]
 }
 
 export interface UptimeGroupResult {
   categoryName: string
   monitors: UptimeMonitor[]
+}
+
+export interface ChannelProbeRunSummary {
+  total: number
+  succeeded: number
+  failed: number
+  deferred?: number
 }
 
 // ============================================================================

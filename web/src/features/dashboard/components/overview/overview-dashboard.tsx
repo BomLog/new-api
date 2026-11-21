@@ -795,7 +795,7 @@ export function OverviewDashboard() {
                 'grid grid-cols-1 gap-4',
                 showLeftContentPanels &&
                   showUptimePanel &&
-                  'xl:grid-cols-[minmax(0,1fr)_22rem]'
+                  'xl:grid-cols-[minmax(0,1fr)_26rem]'
               )}
             >
               {showLeftContentPanels && (

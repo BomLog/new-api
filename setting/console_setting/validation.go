@@ -99,6 +99,10 @@ func ValidateConsoleSettings(settingsStr string, settingType string) error {
 		return validateFAQ(settingsStr)
 	case "UptimeKumaGroups":
 		return validateUptimeKumaGroups(settingsStr)
+	case "ChannelProbeTargets":
+		return ValidateChannelProbeTargets(settingsStr)
+	case "ChannelProbeOptions":
+		return ValidateChannelProbeOptions(settingsStr)
 	default:
 		return common.NewMessage("Unknown setting type: {{type}}", map[string]any{"type": settingType})
 	}
@@ -327,4 +331,228 @@ func validateUptimeKumaGroups(groupsStr string) error {
 
 func GetUptimeKumaGroups() []map[string]any {
 	return getJSONList(GetConsoleSetting().UptimeKumaGroups)
+}
+
+var validProbeEndpointTypes = map[string]bool{
+	"":                 true,
+	"openai":           true,
+	"openai-response":  true,
+	"anthropic":        true,
+	"gemini":           true,
+	"embeddings":       true,
+	"jina-rerank":      true,
+	"image-generation": true,
+}
+
+type ChannelProbeTarget struct {
+	ID           string   `json:"id"`
+	CategoryName string   `json:"categoryName"`
+	DisplayName  string   `json:"displayName,omitempty"`
+	ChannelID    int      `json:"channelId"`
+	Models       []string `json:"models"`
+	Group        string   `json:"group,omitempty"`
+	Prompt       string   `json:"prompt,omitempty"`
+	Stream       *bool    `json:"stream,omitempty"`
+	EndpointType string   `json:"endpointType,omitempty"`
+	MaxTokens    uint     `json:"maxTokens,omitempty"`
+}
+
+type ChannelProbeOptions struct {
+	Prompt            string `json:"prompt,omitempty"`
+	Stream            bool   `json:"stream"`
+	EndpointType      string `json:"endpointType,omitempty"`
+	MaxTokens         uint   `json:"maxTokens,omitempty"`
+	TimeoutSeconds    int    `json:"timeoutSeconds,omitempty"`
+	QueueDelayMs      int    `json:"queueDelayMs,omitempty"`
+	UserBusyWindowSec int    `json:"userBusyWindowSec,omitempty"`
+	MaxDeferSec       int    `json:"maxDeferSec,omitempty"`
+}
+
+func DefaultChannelProbeOptions() ChannelProbeOptions {
+	return ChannelProbeOptions{
+		Prompt:            "hi",
+		Stream:            false,
+		EndpointType:      "",
+		MaxTokens:         16,
+		TimeoutSeconds:    25,
+		QueueDelayMs:      500,
+		UserBusyWindowSec: 30,
+		MaxDeferSec:       60,
+	}
+}
+
+func ValidateChannelProbeOptions(optionsStr string) error {
+	if strings.TrimSpace(optionsStr) == "" {
+		return nil
+	}
+	var opts ChannelProbeOptions
+	if err := common.UnmarshalJsonStr(optionsStr, &opts); err != nil {
+		return common.NewMessage("Invalid channel probe options format: {{error}}", map[string]any{"error": err.Error()})
+	}
+	if opts.Prompt != "" {
+		if exceedsMaxCharacters(opts.Prompt, 500) {
+			return common.NewMessage("Probe prompt cannot exceed 500 characters")
+		}
+		if err := checkDangerousContent(opts.Prompt, 1, groupMessages); err != nil {
+			return err
+		}
+	}
+	endpoint := strings.TrimSpace(opts.EndpointType)
+	if !validProbeEndpointTypes[endpoint] {
+		return common.NewMessage("Invalid probe endpoint type: {{endpoint}}", map[string]any{"endpoint": endpoint})
+	}
+	if opts.MaxTokens > 16384 {
+		return common.NewMessage("Probe max tokens cannot exceed 16384")
+	}
+	if opts.TimeoutSeconds != 0 && (opts.TimeoutSeconds < 5 || opts.TimeoutSeconds > 120) {
+		return common.NewMessage("Probe timeout must be between 5 and 120 seconds")
+	}
+	if opts.QueueDelayMs < 0 || opts.QueueDelayMs > 10000 {
+		return common.NewMessage("Probe queue delay must be between 0 and 10000 milliseconds")
+	}
+	if opts.UserBusyWindowSec < 0 || opts.UserBusyWindowSec > 300 {
+		return common.NewMessage("User activity defer window must be between 0 and 300 seconds")
+	}
+	if opts.MaxDeferSec < 0 || opts.MaxDeferSec > 600 {
+		return common.NewMessage("Maximum defer wait must be between 0 and 600 seconds")
+	}
+	return nil
+}
+
+func GetChannelProbeOptions() ChannelProbeOptions {
+	defaults := DefaultChannelProbeOptions()
+	raw := strings.TrimSpace(GetConsoleSetting().ChannelProbeOptions)
+	if raw == "" {
+		return defaults
+	}
+	var parsed map[string]any
+	if err := common.UnmarshalJsonStr(raw, &parsed); err != nil {
+		return defaults
+	}
+	var opts ChannelProbeOptions
+	if err := common.UnmarshalJsonStr(raw, &opts); err != nil {
+		return defaults
+	}
+	if strings.TrimSpace(opts.Prompt) == "" {
+		opts.Prompt = defaults.Prompt
+	} else {
+		opts.Prompt = strings.TrimSpace(opts.Prompt)
+	}
+	endpoint := strings.TrimSpace(opts.EndpointType)
+	if !validProbeEndpointTypes[endpoint] {
+		endpoint = ""
+	}
+	opts.EndpointType = endpoint
+	if _, ok := parsed["maxTokens"]; !ok {
+		opts.MaxTokens = defaults.MaxTokens
+	} else if opts.MaxTokens > 16384 {
+		opts.MaxTokens = 16384
+	}
+	if opts.TimeoutSeconds < 5 || opts.TimeoutSeconds > 120 {
+		opts.TimeoutSeconds = defaults.TimeoutSeconds
+	}
+	if _, ok := parsed["queueDelayMs"]; !ok {
+		opts.QueueDelayMs = defaults.QueueDelayMs
+	} else {
+		opts.QueueDelayMs = min(max(opts.QueueDelayMs, 0), 10000)
+	}
+	if _, ok := parsed["userBusyWindowSec"]; !ok {
+		opts.UserBusyWindowSec = defaults.UserBusyWindowSec
+	} else {
+		opts.UserBusyWindowSec = min(max(opts.UserBusyWindowSec, 0), 300)
+	}
+	if _, ok := parsed["maxDeferSec"]; !ok {
+		opts.MaxDeferSec = defaults.MaxDeferSec
+	} else {
+		opts.MaxDeferSec = min(max(opts.MaxDeferSec, 0), 600)
+	}
+	return opts
+}
+
+func ValidateChannelProbeTargets(targetsStr string) error {
+	if strings.TrimSpace(targetsStr) == "" {
+		return nil
+	}
+	var targets []ChannelProbeTarget
+	if err := common.UnmarshalJsonStr(targetsStr, &targets); err != nil {
+		return common.NewMessage("Invalid channel probe targets format: {{error}}", map[string]any{"error": err.Error()})
+	}
+	if len(targets) > 40 {
+		return common.NewMessage("Channel probe targets cannot exceed 40 entries")
+	}
+	for i, target := range targets {
+		idx := i + 1
+		categoryName := strings.TrimSpace(target.CategoryName)
+		if categoryName == "" {
+			return common.NewMessage("Probe target #{{index}} is missing the category name field", map[string]any{"index": idx})
+		}
+		if exceedsMaxCharacters(categoryName, 50) {
+			return common.NewMessage("Probe target #{{index}} category name cannot exceed 50 characters", map[string]any{"index": idx})
+		}
+		if target.ChannelID <= 0 {
+			return common.NewMessage("Probe target #{{index}} must specify a valid channel", map[string]any{"index": idx})
+		}
+		if len(target.Models) > 10 {
+			return common.NewMessage("Probe target #{{index}} cannot exceed 10 models", map[string]any{"index": idx})
+		}
+		if err := checkDangerousContent(categoryName, idx, groupMessages); err != nil {
+			return err
+		}
+		if target.DisplayName != "" {
+			if exceedsMaxCharacters(target.DisplayName, 80) {
+				return common.NewMessage("Probe target #{{index}} display name cannot exceed 80 characters", map[string]any{"index": idx})
+			}
+			if err := checkDangerousContent(target.DisplayName, idx, groupMessages); err != nil {
+				return err
+			}
+		}
+		if target.Prompt != "" {
+			if exceedsMaxCharacters(target.Prompt, 500) {
+				return common.NewMessage("Probe target #{{index}} prompt cannot exceed 500 characters", map[string]any{"index": idx})
+			}
+			if err := checkDangerousContent(target.Prompt, idx, groupMessages); err != nil {
+				return err
+			}
+		}
+		endpoint := strings.TrimSpace(target.EndpointType)
+		if !validProbeEndpointTypes[endpoint] {
+			return common.NewMessage("Probe target #{{index}} has an invalid endpoint type", map[string]any{"index": idx})
+		}
+		if target.MaxTokens > 16384 {
+			return common.NewMessage("Probe target #{{index}} max tokens cannot exceed 16384", map[string]any{"index": idx})
+		}
+		for _, m := range target.Models {
+			modelName := strings.TrimSpace(m)
+			if exceedsMaxCharacters(modelName, 120) {
+				return common.NewMessage("Probe target #{{index}} model name cannot exceed 120 characters", map[string]any{"index": idx})
+			}
+			if err := checkDangerousContent(modelName, idx, groupMessages); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func GetChannelProbeTargets() []ChannelProbeTarget {
+	raw := strings.TrimSpace(GetConsoleSetting().ChannelProbeTargets)
+	if raw == "" {
+		return []ChannelProbeTarget{}
+	}
+	var targets []ChannelProbeTarget
+	if err := common.UnmarshalJsonStr(raw, &targets); err != nil {
+		return []ChannelProbeTarget{}
+	}
+	return targets
+}
+
+func GetChannelProbeIntervalMinutes() int {
+	interval := GetConsoleSetting().ChannelProbeIntervalMinutes
+	if interval < 1 {
+		return 15
+	}
+	if interval > 1440 {
+		return 1440
+	}
+	return interval
 }

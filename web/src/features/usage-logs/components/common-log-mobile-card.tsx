@@ -32,7 +32,13 @@ import dayjs from '@/lib/dayjs'
 import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
 
 import type { UsageLog } from '../data/schema'
-import { formatModelName, logTokenName, parseLogOther } from '../lib/format'
+import {
+  formatModelName,
+  getCacheHitRateMetrics,
+  getCacheHitRateTextClass,
+  logTokenName,
+  parseLogOther,
+} from '../lib/format'
 import {
   getLogTypeConfig,
   isDisplayableLogType,
@@ -127,12 +133,9 @@ export function CommonLogMobileCard<TData>(props: {
   const costCell = props.cells.get('quota')
   const contentCell = props.cells.get('content')
   const channelCell = props.cells.get('channel')
-  const cacheRead = other?.cache_tokens || 0
-  const cacheWrite =
-    (other?.cache_creation_tokens_5m || 0) +
-      (other?.cache_creation_tokens_1h || 0) ||
-    other?.cache_creation_tokens ||
-    0
+  const cacheMetrics = getCacheHitRateMetrics(log.prompt_tokens || 0, other)
+  const cacheRead = cacheMetrics.cacheReadTokens
+  const cacheWrite = cacheMetrics.cacheWriteTokens
   const showTokens =
     displayable &&
     props.cells.has('prompt_tokens') &&
@@ -312,6 +315,17 @@ export function CommonLogMobileCard<TData>(props: {
               {t('Cache')} ↑ {cacheWrite.toLocaleString()}
             </span>
           )}
+          <span
+            data-slot='cache-hit-rate-cell'
+            className='inline-flex items-center gap-1'
+          >
+            <span>{t('Cache Hit Rate')}</span>
+            <span
+              className={`font-mono tabular-nums ${getCacheHitRateTextClass(cacheMetrics.formattedPercent ? cacheMetrics.tone : 'zero')}`}
+            >
+              {cacheMetrics.formattedPercent ?? '0%'}
+            </span>
+          </span>
         </div>
       )}
       {contentCell && (

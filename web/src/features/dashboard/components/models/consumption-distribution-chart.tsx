@@ -21,7 +21,6 @@ import { AreaChart, BarChart3, WalletCards } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { IconBadge } from '@/components/ui/icon-badge'
 import { useThemeCustomization } from '@/context/theme-customization-provider'
 import { useTheme } from '@/context/theme-provider'
 import {
@@ -119,20 +118,50 @@ export function ConsumptionDistributionChart(
     customization.preset,
   ].join('-')
 
+  const summaryInsights = useMemo(() => {
+    if (props.loading || props.data.length === 0) {
+      return { modelCount: 0, bucketCount: 0 }
+    }
+    const models = new Set<string>()
+    const buckets = new Set<number>()
+    for (const item of props.data) {
+      if (item.model_name) models.add(item.model_name)
+      if (item.created_at) buckets.add(Number(item.created_at))
+    }
+    return { modelCount: models.size, bucketCount: buckets.size }
+  }, [props.data, props.loading])
+
   return (
-    <div className='overflow-hidden rounded-lg border'>
-      <div className='flex w-full flex-col gap-1.5 border-b px-3 py-2 sm:gap-3 sm:px-5 sm:py-3 lg:flex-row lg:items-center lg:justify-between'>
-        <div className='flex items-center gap-2'>
-          <IconBadge tone='success' size='sm'>
-            <WalletCards />
-          </IconBadge>
-          <div className='text-sm font-semibold'>{t('Quota Distribution')}</div>
-          <span className='text-muted-foreground text-xs'>
-            {t('Total:')} {chartData.totalQuotaDisplay}
-          </span>
+    <div className='bg-card overflow-hidden rounded-xl border'>
+      <div className='flex w-full flex-col gap-2 border-b px-4 py-3 sm:gap-3 sm:px-5 lg:flex-row lg:items-center lg:justify-between'>
+        <div className='flex flex-wrap items-center gap-2.5'>
+          <div className='bg-muted flex size-7 shrink-0 items-center justify-center rounded-md border'>
+            <WalletCards
+              className='text-foreground size-3.5'
+              aria-hidden='true'
+            />
+          </div>
+          <div>
+            <div className='flex flex-wrap items-center gap-2'>
+              <span className='text-sm font-semibold'>
+                {t('Quota Distribution')}
+              </span>
+              <span className='bg-muted text-foreground rounded-md border px-2 py-0.5 font-mono text-xs font-semibold tabular-nums'>
+                {t('Total:')} {chartData.totalQuotaDisplay}
+              </span>
+            </div>
+            {summaryInsights.modelCount > 0 ? (
+              <div className='text-muted-foreground mt-0.5 text-[11px]'>
+                {t('{{models}} active models across {{buckets}} time buckets', {
+                  models: summaryInsights.modelCount,
+                  buckets: summaryInsights.bucketCount,
+                })}
+              </div>
+            ) : null}
+          </div>
         </div>
 
-        <div className='bg-muted/60 inline-flex h-7 w-full overflow-x-auto rounded-lg border p-0.5 sm:h-8 sm:w-auto'>
+        <div className='bg-muted/60 inline-flex h-8 w-full overflow-x-auto rounded-lg border p-0.5 sm:w-auto'>
           {CONSUMPTION_DISTRIBUTION_CHART_OPTIONS.map((item) => {
             const Icon = CHART_TYPE_ICONS[item.value]
             return (
@@ -142,7 +171,7 @@ export function ConsumptionDistributionChart(
                 onClick={() => setChartType(item.value)}
                 className={`inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition-colors ${
                   chartType === item.value
-                    ? 'bg-background text-foreground shadow-sm'
+                    ? 'bg-background text-foreground shadow-xs'
                     : 'text-muted-foreground hover:text-foreground'
                 }`}
               >
@@ -154,7 +183,7 @@ export function ConsumptionDistributionChart(
         </div>
       </div>
 
-      <div className='h-[300px] p-1.5 sm:h-96 sm:p-2'>
+      <div className='h-[300px] p-2 sm:h-[360px] sm:p-3'>
         {themeReady && spec && (
           <VChart
             key={chartKey}

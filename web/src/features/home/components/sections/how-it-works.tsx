@@ -50,10 +50,10 @@ export function HowItWorks() {
   ]
 
   return (
-    <section className='border-border/40 relative z-10 border-t px-6 py-24 md:py-32'>
+    <section className='relative z-10 px-6 py-24 md:py-32'>
       <div className='mx-auto max-w-6xl'>
         <AnimateInView className='mb-16 text-center md:mb-20'>
-          <p className='text-muted-foreground mb-3 text-xs font-medium tracking-widest uppercase'>
+          <p className='mb-3 font-mono text-xs font-medium tracking-widest text-sky-300 uppercase'>
             {t('How It Works')}
           </p>
           <h2 className='text-2xl font-bold tracking-tight md:text-3xl'>
@@ -61,7 +61,11 @@ export function HowItWorks() {
           </h2>
         </AnimateInView>
 
-        <div className='grid gap-8 md:grid-cols-3 md:gap-12'>
+        <div className='relative grid gap-8 md:grid-cols-3 md:gap-12'>
+          <div
+            aria-hidden
+            className='absolute top-8 right-[16%] left-[16%] hidden h-px bg-gradient-to-r from-sky-400/0 via-sky-300/50 to-violet-400/0 md:block'
+          />
           {steps.map((step, i) => (
             <AnimateInView
               key={step.num}
@@ -70,10 +74,10 @@ export function HowItWorks() {
               className='relative flex flex-col items-center text-center'
             >
               <div className='relative mb-6'>
-                <div className='text-muted-foreground border-border/50 bg-muted/30 flex size-16 items-center justify-center rounded-2xl border transition-colors'>
+                <div className='space-panel flex size-16 items-center justify-center text-sky-200'>
                   {step.icon}
                 </div>
-                <div className='bg-foreground text-background absolute -top-2 -right-2 flex size-6 items-center justify-center rounded-full text-xs font-bold'>
+                <div className='absolute -top-2 -right-2 flex size-6 items-center justify-center rounded-full bg-gradient-to-br from-sky-300 to-violet-400 font-mono text-xs font-bold text-slate-950'>
                   {step.num}
                 </div>
               </div>

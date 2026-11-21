@@ -20,6 +20,7 @@ import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { ConfigDrawer } from '@/components/config-drawer'
 import { Dialog } from '@/components/dialog'
 import { LanguageSwitcher } from '@/components/language-switcher'
 import { NotificationPopover } from '@/components/notification-popover'
@@ -31,6 +32,7 @@ import { SystemUpdateAction } from '@/features/system-update/system-update-actio
 import { useNotifications } from '@/hooks/use-notifications'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import { useTopNavLinks } from '@/hooks/use-top-nav-links'
+import { getCustomHeaderLinkClassName } from '@/lib/nav-modules'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -241,12 +243,16 @@ export function PublicHeader(props: PublicHeaderProps) {
             <div className='hidden min-w-0 items-center gap-0.5 lg:flex'>
               {links.map((link) => {
                 const isActive = pathname === link.href
+                const label = link.isCustom ? link.title : t(link.title)
+                const customVariantClass = link.isCustom
+                  ? getCustomHeaderLinkClassName(link.buttonVariant)
+                  : ''
                 if (link.external) {
                   return (
                     <a
-                      key={`${link.title}:${link.href}`}
+                      key={link.id ?? `${link.title}:${link.href}`}
                       href={link.href}
-                      title={t(link.title)}
+                      title={label}
                       target='_blank'
                       rel='noopener noreferrer'
                       aria-disabled={link.disabled}
@@ -254,18 +260,19 @@ export function PublicHeader(props: PublicHeaderProps) {
                       onClick={(event) => handleNavLinkClick(event, link)}
                       className={cn(
                         'text-muted-foreground hover:text-foreground min-w-0 truncate rounded-lg px-3 py-1.5 text-sm font-medium transition-colors duration-200',
+                        customVariantClass,
                         link.disabled && 'pointer-events-none opacity-50'
                       )}
                     >
-                      {t(link.title)}
+                      {label}
                     </a>
                   )
                 }
                 return (
                   <Link
-                    key={`${link.title}:${link.href}`}
+                    key={link.id ?? `${link.title}:${link.href}`}
                     to={link.href}
-                    title={t(link.title)}
+                    title={label}
                     disabled={link.disabled}
                     onClick={(event) => handleNavLinkClick(event, link)}
                     className={cn(
@@ -273,10 +280,11 @@ export function PublicHeader(props: PublicHeaderProps) {
                       isActive
                         ? 'text-foreground'
                         : 'text-muted-foreground hover:text-foreground',
+                      customVariantClass,
                       link.disabled && 'pointer-events-none opacity-50'
                     )}
                   >
-                    {t(link.title)}
+                    {label}
                   </Link>
                 )
               })}
@@ -288,7 +296,12 @@ export function PublicHeader(props: PublicHeaderProps) {
               )}
 
               {showLanguageSwitcher && <LanguageSwitcher />}
-              {showThemeSwitch && <ThemeSwitch />}
+              {showThemeSwitch && (
+                <>
+                  <ThemeSwitch />
+                  <ConfigDrawer className='max-md:inline-flex' />
+                </>
+              )}
               {showNotifications && (
                 <NotificationPopover
                   open={notifications.popoverOpen}
@@ -312,7 +325,12 @@ export function PublicHeader(props: PublicHeaderProps) {
 
             {/* Mobile: compact actions + hamburger */}
             <div className='flex shrink-0 items-center gap-2 lg:hidden'>
-              {showThemeSwitch && <ThemeSwitch />}
+              {showThemeSwitch && (
+                <>
+                  <ThemeSwitch />
+                  <ConfigDrawer className='max-md:inline-flex' />
+                </>
+              )}
               {showAuthButtons && !loading && isAuthenticated && (
                 <ProfileDropdown />
               )}
@@ -363,6 +381,7 @@ export function PublicHeader(props: PublicHeaderProps) {
           <nav className='flex flex-col gap-1'>
             {links.map((link, i) => {
               const isActive = pathname === link.href
+              const label = link.isCustom ? link.title : t(link.title)
               const linkClassName = cn(
                 'flex items-center gap-3 py-3 text-base font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]',
                 mobileOpen
@@ -377,7 +396,7 @@ export function PublicHeader(props: PublicHeaderProps) {
               if (link.external) {
                 return (
                   <a
-                    key={`${link.title}:${link.href}`}
+                    key={link.id ?? `${link.title}:${link.href}`}
                     href={link.href}
                     target='_blank'
                     rel='noopener noreferrer'
@@ -387,20 +406,20 @@ export function PublicHeader(props: PublicHeaderProps) {
                     className={linkClassName}
                     style={transitionStyle}
                   >
-                    {t(link.title)}
+                    {label}
                   </a>
                 )
               }
               return (
                 <Link
-                  key={`${link.title}:${link.href}`}
+                  key={link.id ?? `${link.title}:${link.href}`}
                   to={link.href}
                   disabled={link.disabled}
                   onClick={(event) => handleNavLinkClick(event, link, true)}
                   className={linkClassName}
                   style={transitionStyle}
                 >
-                  {t(link.title)}
+                  {label}
                 </Link>
               )
             })}

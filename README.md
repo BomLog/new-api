@@ -44,6 +44,7 @@
 </p>
 
 <p align="center">
+  <a href="#enhancements">Enhanced features</a> •
   <a href="#screenshots">Screenshots</a> •
   <a href="#capabilities">Capabilities</a> •
   <a href="#quick-start">Quick start</a> •
@@ -58,9 +59,23 @@
 
 ## 📝 Project Description
 
-New API is a self-hosted AI gateway for applications, agents, and teams. Connect upstream model services, expose a consistent API to your clients, and manage routing, access, usage, and costs in one place.
+New API (`BomLog/new-api`, customized from [QuantumNous/new-api](https://github.com/QuantumNous/new-api)) is a self-hosted AI gateway for applications, agents, and teams. Connect upstream model services, expose a consistent API to your clients, and manage routing, access, usage, and costs in one place.
 
 Use it to share authorized model access across a team, switch providers without configuring every client again, or operate a private multi-model service with a web console. Upstreams include OpenAI, Anthropic, Google Gemini, Azure OpenAI, AWS Bedrock, Vertex AI, DeepSeek, Qwen, and other compatible services.
+
+<a id="enhancements"></a>
+
+## ✨ Custom Enhancements in This Fork
+
+In addition to all upstream New API capabilities, this repository includes the following product, observability, and UX upgrades:
+
+| Module | Highlights |
+| --- | --- |
+| **Commercial Analytics Dashboard** | Redesigned in an OpenRouter + Vercel FinOps aesthetic: top quick range (`1d` / `7d` / `14d` / `29d`) & granularity (`hour` / `day` / `week`) command bar, **5-card KPI row** (Spend, Requests, Tokens, Cache Efficiency, **Cost / 1M Tokens**) with period-over-period delta badges & sparklines, **Token Composition bar** (Standard / Cache Read / Cache Write), interactive 7:5 **Model Cost & Efficiency** leaderboard with full-dashboard cross-filtering, **Admin Channel Spend Ranking**, one-click **CSV export**, and direct drill-down to Usage Logs. |
+| **Built-in Channel Health Monitor & Scheduled Probe Queue** | Replaces external Uptime Kuma with a native Statuspage-style availability panel (global health banner, 30-check heartbeat bars, sanitized public output) and a queued background model probe scheduler. Automatically **defers scheduled probes when real user traffic is active** on a channel (avoiding rate-limit contention and false outage alerts), supports **multi-select model picker** per channel, and offers global + per-target overrides for **probe prompt** (e.g. `hi` / `ping` / `Reply OK`), **non-stream / stream mode**, endpoint protocol, `max_tokens`, timeout, and queue spacing. |
+| **Usage Logs Cache Hit Rate** | Dedicated **Cache Hit Rate** column next to Tokens with 5-tier semantic color coding computed from actual cache read ratios (explicitly showing `0%` for non-streaming / uncached requests) and responsive mobile card support. |
+| **Visual API Key Creation & Security Hardening** | Widescreen split-pane API key creator with persistent **vendor & channel/group visual selector**, lowest-multiplier channel recommendation, expandable full model catalog, automatic cache invalidation after group/channel edits, and hardened 403 silent fallback for non-admin users. |
+| **Cosmic Landing Page & Custom Header Navigation** | Redesigned interactive landing experience with cosmic visual backdrop and live API preview, plus administrator-configurable **custom header navigation buttons** synced across the console. |
 
 > [!IMPORTANT]
 > - This project is intended solely for lawful and authorized AI API gateway, organization-level authentication, multi-model management, usage analytics, cost accounting, and private deployment scenarios.

@@ -55,6 +55,9 @@ function ThemeControls() {
       >
         Anthropic preset
       </button>
+      <button type='button' onClick={() => customization.setPreset('galaxy')}>
+        Galaxy preset
+      </button>
       <button type='button' onClick={() => customization.setPreset('default')}>
         Default preset
       </button>
@@ -297,5 +300,19 @@ describe('theme font selection', () => {
 
     expect(document.body).toHaveAttribute('data-theme-font', 'system')
     expect(localStorage.getItem('newapi:theme:v1:font')).toBeNull()
+  })
+
+  it('applies and persists the cosmic galaxy preset', async () => {
+    const user = userEvent.setup()
+    const first = render(<ThemeFixture />)
+
+    await user.click(screen.getByRole('button', { name: 'Galaxy preset' }))
+
+    expect(document.body).toHaveAttribute('data-theme-preset', 'galaxy')
+    expect(localStorage.getItem('newapi:theme:v1:preset')).toBe('galaxy')
+
+    first.unmount()
+    render(<ThemeFixture />)
+    expect(document.body).toHaveAttribute('data-theme-preset', 'galaxy')
   })
 })

@@ -210,6 +210,10 @@ export type ContentSettings = {
   'console_setting.announcements': string
   'console_setting.faq': string
   'console_setting.uptime_kuma_groups': string
+  'console_setting.channel_probe_targets': string
+  'console_setting.channel_probe_options': string
+  'console_setting.channel_probe_enabled': boolean
+  'console_setting.channel_probe_interval_minutes': number
   'console_setting.api_info_enabled': boolean
   'console_setting.announcements_enabled': boolean
   'console_setting.faq_enabled': boolean

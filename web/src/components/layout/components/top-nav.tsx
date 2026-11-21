@@ -27,9 +27,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { getCustomHeaderLinkClassName } from '@/lib/nav-modules'
 import { cn } from '@/lib/utils'
 
-import { type TopNavLink } from '../types'
+import type { TopNavLink } from '../types'
 
 type TopNavProps = React.HTMLAttributes<HTMLElement> & {
   links: TopNavLink[]
@@ -87,7 +88,7 @@ export function TopNav({ className, links, ...props }: TopNavProps) {
                       </Link>
                     )
                   }
-                ></DropdownMenuItem>
+                />
               )
             )}
           </DropdownMenuContent>
@@ -102,27 +103,46 @@ export function TopNav({ className, links, ...props }: TopNavProps) {
         )}
         {...props}
       >
-        {normalizedLinks.map(({ title, href, isActive, disabled, external }) =>
-          external ? (
-            <a
-              key={`${title}-${href}`}
-              href={href}
-              target='_blank'
-              rel='noopener noreferrer'
-              className={`hover:text-primary text-sm font-medium transition-colors ${isActive ? '' : 'text-muted-foreground'}`}
-            >
-              {title}
-            </a>
-          ) : (
-            <Link
-              key={`${title}-${href}`}
-              to={href}
-              disabled={disabled}
-              className={`hover:text-primary text-sm font-medium transition-colors ${isActive ? '' : 'text-muted-foreground'}`}
-            >
-              {title}
-            </Link>
-          )
+        {normalizedLinks.map(
+          ({
+            id,
+            title,
+            href,
+            isActive,
+            disabled,
+            external,
+            isCustom,
+            buttonVariant,
+          }) => {
+            const customClass = isCustom
+              ? getCustomHeaderLinkClassName(buttonVariant)
+              : ''
+            const baseClass = cn(
+              'hover:text-primary text-sm font-medium transition-colors',
+              !isActive && 'text-muted-foreground',
+              customClass
+            )
+            return external ? (
+              <a
+                key={id ?? `${title}-${href}`}
+                href={href}
+                target='_blank'
+                rel='noopener noreferrer'
+                className={baseClass}
+              >
+                {title}
+              </a>
+            ) : (
+              <Link
+                key={id ?? `${title}-${href}`}
+                to={href}
+                disabled={disabled}
+                className={baseClass}
+              >
+                {title}
+              </Link>
+            )
+          }
         )}
       </nav>
     </>

@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
@@ -18,6 +19,7 @@ import (
 // as one task row. Call this before service.StartSystemTaskRunner.
 func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(channelTestHandler{})
+	service.RegisterSystemTaskHandler(channelProbeHandler{})
 	service.RegisterSystemTaskHandler(channelBalanceHandler{})
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
@@ -209,4 +211,30 @@ func finishSystemTaskHandler(task *model.SystemTask, runnerID string, status mod
 	if err := model.FinishSystemTask(task.TaskID, runnerID, status, result, errorMessage); err != nil {
 		common.SysLog(common.LogText("system task %s failed to persist result: %v", task.TaskID, err))
 	}
+}
+
+// channelProbeHandler runs periodic channel/model availability probes for the
+// built-in status & success-rate panel.
+type channelProbeHandler struct{}
+
+func (channelProbeHandler) Type() string { return model.SystemTaskTypeChannelProbe }
+
+func (channelProbeHandler) Enabled() bool {
+	cs := console_setting.GetConsoleSetting()
+	return cs.UptimeKumaEnabled && cs.ChannelProbeEnabled
+}
+
+func (channelProbeHandler) Interval() time.Duration {
+	return time.Duration(console_setting.GetChannelProbeIntervalMinutes()) * time.Minute
+}
+
+func (channelProbeHandler) NewPayload() any { return nil }
+
+func (channelProbeHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	summary, err := runChannelProbeTask(ctx, true, service.NewSystemTaskProgressReporter(task, runnerID))
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, summary, err)
+		return
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
 }

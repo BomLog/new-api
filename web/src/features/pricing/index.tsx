@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { CustomButtonsBar } from '@/components/custom-nav-buttons'
 import { PublicLayout } from '@/components/layout'
 import { PageTransition } from '@/components/page-transition'
 
@@ -199,6 +200,11 @@ export function Pricing() {
                 'Search model name, provider, endpoint, or tag...'
               )}
               className='mx-auto mt-4 max-w-2xl sm:mt-6'
+            />
+            <CustomButtonsBar
+              placement='pricing'
+              size='compact'
+              className='mt-4 justify-center'
             />
           </header>
 

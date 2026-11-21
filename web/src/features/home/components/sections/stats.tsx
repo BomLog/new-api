@@ -19,23 +19,34 @@ For commercial licensing, please contact support@quantumnous.com
 import { useRef, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { toIntlLocale } from '@/i18n/languages'
+import { formatNumber } from '@/lib/format'
+
 interface CounterProps {
   end: number
   suffix?: string
   prefix?: string
   duration?: number
   decimals?: number
+  locale: string
 }
 
 function Counter(props: CounterProps) {
-  const { end, suffix = '', prefix = '', duration = 1600, decimals = 0 } = props
+  const {
+    end,
+    suffix = '',
+    prefix = '',
+    duration = 1600,
+    decimals = 0,
+    locale,
+  } = props
   const ref = useRef<HTMLSpanElement>(null)
   const startedRef = useRef(false)
 
   const formatValue = useCallback(
     (v: number) =>
-      decimals > 0 ? v.toFixed(decimals) : Math.round(v).toLocaleString(),
-    [decimals]
+      decimals > 0 ? v.toFixed(decimals) : formatNumber(Math.round(v), locale),
+    [decimals, locale]
   )
 
   const animate = useCallback(() => {
@@ -95,7 +106,8 @@ interface StatItem {
 }
 
 export function Stats(_props: StatsProps) {
-  const { t } = useTranslation()
+  const { i18n, t } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
 
   const stats: StatItem[] = [
     { end: 50, suffix: '+', label: t('upstream services integrated') },
@@ -105,18 +117,23 @@ export function Stats(_props: StatsProps) {
   ]
 
   return (
-    <div className='border-border/40 bg-muted/10 relative z-10 border-y'>
-      <div className='mx-auto max-w-6xl px-6 py-10 md:py-12'>
+    <div className='relative z-10 px-6'>
+      <div className='space-panel mx-auto max-w-6xl px-6 py-8 md:py-10'>
         <div className='grid grid-cols-2 gap-8 md:grid-cols-4 md:gap-12'>
           {stats.map((s) => (
             <div
               key={s.label}
               className='flex flex-col items-center text-center'
             >
-              <span className='text-2xl font-bold tracking-tight md:text-3xl'>
-                <Counter end={s.end} suffix={s.suffix} decimals={s.decimals} />
+              <span className='space-gradient-text font-mono text-3xl font-bold tracking-tight md:text-4xl'>
+                <Counter
+                  end={s.end}
+                  suffix={s.suffix}
+                  decimals={s.decimals}
+                  locale={locale}
+                />
               </span>
-              <span className='text-muted-foreground mt-1.5 text-xs'>
+              <span className='text-muted-foreground mt-2 text-xs tracking-wide'>
                 {s.label}
               </span>
             </div>

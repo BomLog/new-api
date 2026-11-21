@@ -17,11 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import * as z from 'zod'
 
+import { CustomButtonsEditorFields } from '@/components/custom-nav-buttons'
 import {
   Form,
   FormControl,
@@ -31,6 +33,10 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Switch } from '@/components/ui/switch'
+import {
+  type CustomNavButton,
+  validateCustomButtonsDraft,
+} from '@/lib/nav-modules'
 
 import {
   SettingsControlChildren,
@@ -104,6 +110,9 @@ export function HeaderNavigationSection({
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const formDefaults = useMemo(() => toFormValues(config), [config])
+  const [customButtons, setCustomButtons] = useState<CustomNavButton[]>(
+    config.customButtons ?? []
+  )
 
   const form = useForm<HeaderNavFormValues>({
     resolver: zodResolver(headerNavSchema),
@@ -112,9 +121,22 @@ export function HeaderNavigationSection({
 
   useEffect(() => {
     form.reset(formDefaults)
-  }, [formDefaults, form])
+    setCustomButtons(config.customButtons ?? [])
+  }, [formDefaults, form, config.customButtons])
 
   const onSubmit = async (values: HeaderNavFormValues) => {
+    const validation = validateCustomButtonsDraft(customButtons)
+    if (!validation.valid) {
+      let message = t('Please enter a valid relative path or http(s) URL.')
+      if (validation.reason === 'label') {
+        message = t('Please enter a label for every custom button.')
+      } else if (validation.reason === 'placements') {
+        message = t('Please select at least one display location.')
+      }
+      toast.error(message)
+      return
+    }
+
     const payload: HeaderNavModulesConfig = {
       ...config,
       home: values.home,
@@ -131,6 +153,7 @@ export function HeaderNavigationSection({
         enabled: values.rankingsEnabled,
         requireAuth: values.rankingsRequireAuth,
       },
+      customButtons,
     }
 
     const serialized = serializeHeaderNavModules(payload)
@@ -146,6 +169,7 @@ export function HeaderNavigationSection({
 
   const resetToDefault = () => {
     form.reset(toFormValues(HEADER_NAV_DEFAULT))
+    setCustomButtons([])
   }
 
   const simpleModules: Array<{
@@ -293,6 +317,13 @@ export function HeaderNavigationSection({
                 />
               </SettingsControlGroup>
             ))}
+          </div>
+
+          <div className='border-border/60 border-t pt-6'>
+            <CustomButtonsEditorFields
+              buttons={customButtons}
+              onChange={setCustomButtons}
+            />
           </div>
         </SettingsForm>
       </Form>

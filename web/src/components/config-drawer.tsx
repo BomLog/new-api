@@ -49,7 +49,11 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet'
 import { useDirection } from '@/context/direction-provider'
-import { type Collapsible, useLayout } from '@/context/layout-provider'
+import {
+  type Collapsible,
+  useLayout,
+  useOptionalLayout,
+} from '@/context/layout-provider'
 import { useThemeCustomization } from '@/context/theme-customization-provider'
 import { useTheme } from '@/context/theme-provider'
 import {
@@ -63,23 +67,23 @@ import {
 } from '@/lib/theme-customization'
 import { cn } from '@/lib/utils'
 
-import { useSidebar } from './ui/sidebar'
+import { useOptionalSidebar, useSidebar } from './ui/sidebar'
 
 const Item = RadioPrimitive.Root
 
-export function ConfigDrawer() {
+export function ConfigDrawer(props: { className?: string }) {
   const { t } = useTranslation()
-  const { setOpen } = useSidebar()
+  const sidebar = useOptionalSidebar()
+  const layout = useOptionalLayout()
   const { resetDir } = useDirection()
   const { resetTheme } = useTheme()
-  const { resetLayout } = useLayout()
   const { resetCustomization } = useThemeCustomization()
 
   const handleReset = () => {
-    setOpen(true)
+    sidebar?.setOpen(true)
     resetDir()
     resetTheme()
-    resetLayout()
+    layout?.resetLayout()
     resetCustomization()
   }
 
@@ -92,7 +96,7 @@ export function ConfigDrawer() {
             variant='ghost'
             aria-label={t('Open theme settings')}
             aria-describedby='config-drawer-description'
-            className='max-md:hidden'
+            className={cn('max-md:hidden', props.className)}
           />
         }
       >
@@ -111,9 +115,13 @@ export function ConfigDrawer() {
           <FontConfig />
           <RadiusConfig />
           <ScaleConfig />
-          <SidebarConfig />
-          <LayoutConfig />
-          <ContentLayoutConfig />
+          {sidebar && layout ? (
+            <>
+              <SidebarConfig />
+              <LayoutConfig />
+              <ContentLayoutConfig />
+            </>
+          ) : null}
           <DirConfig />
         </div>
         <SheetFooter className={sideDrawerFooterClassName('grid-cols-1')}>
@@ -244,6 +252,18 @@ function ThemeConfig() {
   )
 }
 
+function getPresetSwatchBackground(
+  preset: (typeof THEME_PRESETS)[number]
+): string {
+  if (preset.value === 'default') {
+    return 'linear-gradient(135deg, oklch(0.68 0.2 25) 0%, oklch(0.8 0.17 85) 25%, oklch(0.72 0.18 155) 50%, oklch(0.66 0.19 245) 75%, oklch(0.68 0.2 315) 100%)'
+  }
+  if (preset.value === 'galaxy') {
+    return 'radial-gradient(circle at 28% 30%, #7dd3fc 0%, transparent 45%), radial-gradient(circle at 75% 70%, #c084fc 0%, transparent 48%), linear-gradient(135deg, #090d24 0%, #1d1546 52%, #0e2747 100%)'
+  }
+  return `linear-gradient(135deg, ${preset.swatches[0]} 0%, ${preset.swatches[1] ?? preset.swatches[0]} 100%)`
+}
+
 function PresetConfig() {
   const { t } = useTranslation()
   const { defaults, customization, setPreset } = useThemeCustomization()
@@ -279,10 +299,7 @@ function PresetConfig() {
                 aria-hidden='true'
                 className='absolute inset-0 rounded-md'
                 style={{
-                  background:
-                    preset.value === 'default'
-                      ? 'linear-gradient(135deg, oklch(0.68 0.2 25) 0%, oklch(0.8 0.17 85) 25%, oklch(0.72 0.18 155) 50%, oklch(0.66 0.19 245) 75%, oklch(0.68 0.2 315) 100%)'
-                      : `linear-gradient(135deg, ${preset.swatches[0]} 0%, ${preset.swatches[1] ?? preset.swatches[0]} 100%)`,
+                  background: getPresetSwatchBackground(preset),
                 }}
               />
               <CircleCheck

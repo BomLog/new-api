@@ -21,7 +21,6 @@ import { PieChart as PieChartIcon } from 'lucide-react'
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { IconBadge } from '@/components/ui/icon-badge'
 import { useThemeCustomization } from '@/context/theme-customization-provider'
 import { useTheme } from '@/context/theme-provider'
 import {
@@ -119,21 +118,24 @@ export function ModelCharts(props: ModelChartsProps) {
   ].join('-')
 
   return (
-    <div className='overflow-hidden rounded-lg border'>
-      <div className='flex w-full flex-col gap-1.5 border-b px-3 py-2 sm:gap-3 sm:px-5 sm:py-3 lg:flex-row lg:items-center lg:justify-between'>
-        <div className='flex items-center gap-2'>
-          <IconBadge tone='chart-4' size='sm'>
-            <PieChartIcon />
-          </IconBadge>
+    <div className='bg-card flex h-full flex-col overflow-hidden rounded-xl border'>
+      <div className='flex w-full flex-col gap-2 border-b px-4 py-3 sm:gap-3 sm:px-5 lg:flex-row lg:items-center lg:justify-between'>
+        <div className='flex flex-wrap items-center gap-2.5'>
+          <div className='bg-muted flex size-7 shrink-0 items-center justify-center rounded-md border'>
+            <PieChartIcon
+              className='text-foreground size-3.5'
+              aria-hidden='true'
+            />
+          </div>
           <div className='text-sm font-semibold'>
             {t('Model Call Analytics')}
           </div>
-          <span className='text-muted-foreground text-xs'>
+          <span className='bg-muted text-foreground rounded-md border px-2 py-0.5 font-mono text-xs font-semibold tabular-nums'>
             {t('Total:')} {chartData.totalCountDisplay}
           </span>
         </div>
 
-        <div className='bg-muted/60 inline-flex h-7 w-full overflow-x-auto rounded-lg border p-0.5 sm:h-8 sm:w-auto'>
+        <div className='bg-muted/60 inline-flex h-8 w-full overflow-x-auto rounded-lg border p-0.5 sm:w-auto'>
           {MODEL_ANALYTICS_CHART_OPTIONS.map((tab) => (
             <button
               key={tab.value}
@@ -141,7 +143,7 @@ export function ModelCharts(props: ModelChartsProps) {
               onClick={() => setActiveTab(tab.value)}
               className={`shrink-0 rounded-md px-3 text-xs font-medium transition-colors ${
                 activeTab === tab.value
-                  ? 'bg-background text-foreground shadow-sm'
+                  ? 'bg-background text-foreground shadow-xs'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
             >
@@ -151,7 +153,7 @@ export function ModelCharts(props: ModelChartsProps) {
         </div>
       </div>
 
-      <div className='h-[300px] p-1.5 sm:h-96 sm:p-2'>
+      <div className='h-[320px] flex-1 p-2 sm:h-[400px] sm:p-3'>
         {themeReady && spec && (
           <VChart
             key={chartKey}

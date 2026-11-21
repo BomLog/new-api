@@ -49,11 +49,15 @@ const originalGet = apiClient.get
 const originalPost = apiClient.post
 let renderedDrawer: RenderedDrawer | null = null
 
-function installApiFixtures(createdPayloads: Array<Record<string, unknown>>) {
+function installApiFixtures(
+  createdPayloads: Array<Record<string, unknown>>,
+  options?: { defaultUseAutoGroup?: boolean }
+) {
+  const defaultUseAutoGroup = options?.defaultUseAutoGroup ?? true
   apiClient.get = async (url) => {
     switch (url) {
       case '/api/status':
-        return { data: { data: { default_use_auto_group: true } } }
+        return { data: { data: { default_use_auto_group: defaultUseAutoGroup } } }
       case '/api/user/models':
         return { data: { success: true, data: [] } }
       case '/api/user/self/groups':
@@ -74,6 +78,24 @@ function installApiFixtures(createdPayloads: Array<Record<string, unknown>>) {
             data: { groups: ['vip', 'default'], max_count: 3 },
           },
         }
+      case '/api/pricing':
+        return {
+          data: {
+            success: true,
+            vendors: [{ id: 1, name: 'OpenAI', icon: 'OpenAI' }],
+            data: [
+              {
+                id: 1,
+                model_name: 'gpt-4o',
+                vendor_id: 1,
+                quota_type: 0,
+                model_ratio: 1,
+                completion_ratio: 1,
+                enable_groups: ['default', 'vip'],
+              },
+            ],
+          },
+        }
       default:
         throw new Error(`Unexpected GET ${url}`)
     }
@@ -86,14 +108,17 @@ function installApiFixtures(createdPayloads: Array<Record<string, unknown>>) {
   }
 }
 
-async function renderCreateDrawer(): Promise<void> {
+async function renderCreateDrawer(options?: {
+  defaultUseAutoGroup?: boolean
+}): Promise<void> {
+  const defaultUseAutoGroup = options?.defaultUseAutoGroup ?? true
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
   const freshAt = Date.now() + 60_000
   queryClient.setQueryData(
     ['status'],
-    { default_use_auto_group: true },
+    { default_use_auto_group: defaultUseAutoGroup },
     { updatedAt: freshAt }
   )
   queryClient.setQueryData(
@@ -211,8 +236,10 @@ describe('API keys mutate drawer Auto group integration', () => {
     installApiFixtures(createdPayloads)
     await renderCreateDrawer()
 
-    const groupTrigger = getControlByLabel('Group')
-    expect(groupTrigger.textContent?.includes('auto')).toBe(true)
+    const groupSummary = document.querySelector(
+      '[data-slot="selected-group-label"]'
+    )
+    expect(groupSummary?.textContent).toBe('auto')
     expect(
       document.body.textContent?.includes(
         'Using the complete global Auto order (2 groups)'
@@ -261,10 +288,19 @@ describe('API keys mutate drawer Auto group integration', () => {
     )
     expect(findButton('Restore global Auto', true).disabled).toBe(false)
 
-    const groupTrigger = getControlByLabel('Group')
-    selectComboboxOption(groupTrigger, 'Standard access')
+    const vendorTab = await screen.findByRole('tab', {
+      name: /OpenAI/i,
+    })
+    fireEvent.click(vendorTab)
+    const defaultChannel = await screen.findByRole('button', {
+      name: /Standard access/i,
+    })
+    expect(defaultChannel).toHaveTextContent('Recommended')
+    fireEvent.click(defaultChannel)
     expect(document.querySelector('button[aria-label="Remove vip"]')).toBe(null)
-    selectComboboxOption(groupTrigger, 'Automatic routing')
+    fireEvent.click(
+      await screen.findByRole('button', { name: /auto/i })
+    )
 
     expect(
       document.querySelector('button[aria-label="Remove vip"]')
@@ -422,5 +458,48 @@ describe('API keys mutate drawer user quota query switch', () => {
     fireEvent.click(findButton('Save changes', true))
     await waitFor(() => expect(createdPayloads).toHaveLength(1))
     expect(createdPayloads[0]?.allow_user_quota_query).toBe(false)
+  })
+})
+
+describe('API keys commercial modal quota and post-create success view', () => {
+  test('toggles fixed quota cap and shows the created key quickstart view after submission', async () => {
+    const createdPayloads: Array<Record<string, unknown>> = []
+    installApiFixtures(createdPayloads)
+    await renderCreateDrawer()
+
+    const unlimitedSwitch = screen.getByRole('switch', {
+      name: 'Unlimited Quota',
+    })
+    expect(unlimitedSwitch).toBeChecked()
+    fireEvent.click(unlimitedSwitch)
+    expect(unlimitedSwitch).not.toBeChecked()
+
+    fireEvent.click(screen.getByRole('button', { name: '1 Day' }))
+    expect(screen.getByLabelText('Time')).toBeEnabled()
+
+    changeInput(getControlByLabel('Name'), 'production-app')
+    fireEvent.click(findButton('Save changes', true))
+
+    await waitFor(() => expect(createdPayloads).toHaveLength(1))
+    expect(createdPayloads[0]?.name).toBe('production-app')
+    expect(createdPayloads[0]?.unlimited_quota).toBe(false)
+    expect(Number(createdPayloads[0]?.expired_time)).toBeGreaterThan(0)
+
+    expect(
+      await screen.findByRole('button', { name: 'Reveal & Copy Key' })
+    ).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Done' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Create another' })).toBeVisible()
+  })
+
+  test('defaults to an available group instead of empty when default_use_auto_group is off', async () => {
+    const createdPayloads: Array<Record<string, unknown>> = []
+    installApiFixtures(createdPayloads, { defaultUseAutoGroup: false })
+    await renderCreateDrawer({ defaultUseAutoGroup: false })
+
+    expect(
+      document.querySelector('[data-slot="selected-group-label"]')?.textContent
+    ).toBe('default')
+    expect(screen.queryByText('Select a group')).not.toBeInTheDocument()
   })
 })

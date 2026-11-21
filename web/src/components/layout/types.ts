@@ -19,6 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 import type { LinkProps } from '@tanstack/react-router'
 import type { TFunction } from 'i18next'
 
+import type { CustomButtonVariant } from '@/lib/nav-modules'
+
 /**
  * Base navigation item type
  */
@@ -91,12 +93,15 @@ export type SidebarData = {
  * Top navigation link type
  */
 export type TopNavLink = {
+  id?: string
   title: string
   href: string
   isActive?: boolean
   disabled?: boolean
   requiresAuth?: boolean
   external?: boolean
+  isCustom?: boolean
+  buttonVariant?: CustomButtonVariant
 }
 
 /**

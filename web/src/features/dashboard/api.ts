@@ -21,6 +21,7 @@ import { api } from '@/lib/api'
 import type {
   FlowQuotaDataItem,
   QuotaDataItem,
+  ChannelProbeRunSummary,
   UptimeGroupResult,
 } from './types'
 
@@ -84,10 +85,23 @@ export async function getFlowQuotaDates(
   return res.data
 }
 
-// Get uptime monitoring status for all services
+// Get built-in channel availability & probe success-rate status
 export async function getUptimeStatus() {
   const res = await api.get<{ success: boolean; data: UptimeGroupResult[] }>(
     '/api/uptime/status'
   )
+  return res.data
+}
+
+// Trigger an immediate channel model probe cycle (root only)
+export async function triggerChannelProbe() {
+  const res = await api.post<{
+    success: boolean
+    message?: string
+    data?: {
+      summary: ChannelProbeRunSummary
+      groups: UptimeGroupResult[]
+    }
+  }>('/api/option/channel_probe/run')
   return res.data
 }

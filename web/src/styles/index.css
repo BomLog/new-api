@@ -417,39 +417,11 @@ For commercial licensing, please contact support@quantumnous.com
       transform: scale(1);
     }
   }
-
-  /* Vertical scroll animation for icon lists */
-  @keyframes scroll-up {
-    0% {
-      transform: translateY(0);
-    }
-    100% {
-      transform: translateY(-50%);
-    }
-  }
-
-  .animate-scroll-up {
-    animation: scroll-up 20s linear infinite;
-    will-change: transform;
-  }
-
-  .animate-scroll-down {
-    animation: scroll-up 20s linear infinite reverse;
-    will-change: transform;
-  }
-
-  /* Pause animation on hover */
-  .scroll-container:hover .animate-scroll-up,
-  .scroll-container:hover .animate-scroll-down {
-    animation-play-state: paused;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .animate-appear,
   .animate-appear-zoom,
-  .animate-scroll-up,
-  .animate-scroll-down,
   [data-slot='table'] tbody tr {
     animation: none !important;
     opacity: 1;
@@ -744,4 +716,77 @@ For commercial licensing, please contact support@quantumnous.com
   .auto-group-flow-border {
     display: none;
   }
+}
+
+/* Home page "deep space" surface. Rendered inside a `.dark` wrapper so the
+ * shared dark tokens apply; these rules only add the cosmic backdrop and
+ * the futuristic panel treatment used by the landing sections. */
+.home-space {
+  --background: oklch(0.125 0.032 268);
+  --card: oklch(0.185 0.038 268);
+  --muted: oklch(0.22 0.034 268);
+  --border: oklch(0.5 0.08 262 / 42%);
+  background:
+    radial-gradient(
+      ellipse 85% 60% at 72% 4%,
+      oklch(0.32 0.14 288 / 48%),
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 65% 52% at 6% 58%,
+      oklch(0.32 0.12 225 / 38%),
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 50% 42% at 88% 85%,
+      oklch(0.28 0.11 315 / 32%),
+      transparent 70%
+    ),
+    var(--background);
+}
+
+.space-grid {
+  background-image:
+    linear-gradient(to right, oklch(0.7 0.12 250 / 8%) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(0.7 0.12 250 / 8%) 1px, transparent 1px);
+  background-size: 4rem 4rem;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, black, transparent);
+}
+
+.space-gradient-text {
+  background: linear-gradient(90deg, #7dd3fc, #a78bfa 45%, #f0abfc);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Glass panel with a thin luminous gradient edge. */
+.space-panel {
+  position: relative;
+  border-radius: 1rem;
+  background: linear-gradient(
+    180deg,
+    oklch(0.24 0.04 270 / 70%),
+    oklch(0.17 0.03 270 / 60%)
+  );
+  backdrop-filter: blur(12px);
+  box-shadow: 0 20px 60px -30px oklch(0.55 0.2 280 / 50%);
+}
+.space-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(
+    135deg,
+    oklch(0.8 0.12 230 / 55%),
+    oklch(0.5 0.08 280 / 15%) 40%,
+    oklch(0.7 0.17 310 / 45%)
+  );
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
 }

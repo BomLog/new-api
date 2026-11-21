@@ -85,11 +85,16 @@ const CONTENT_SECTIONS = [
   },
   {
     id: 'uptime-kuma',
-    titleKey: 'Uptime Kuma',
+    titleKey: 'Channel Health Monitor',
     build: (settings: ContentSettings) => (
       <UptimeKumaSection
         enabled={settings['console_setting.uptime_kuma_enabled']}
-        data={settings['console_setting.uptime_kuma_groups']}
+        probeEnabled={settings['console_setting.channel_probe_enabled']}
+        intervalMinutes={
+          settings['console_setting.channel_probe_interval_minutes']
+        }
+        data={settings['console_setting.channel_probe_targets']}
+        options={settings['console_setting.channel_probe_options']}
       />
     ),
   },

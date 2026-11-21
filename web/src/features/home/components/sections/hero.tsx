@@ -21,10 +21,11 @@ import { Link } from '@tanstack/react-router'
 import { ArrowRight, BookOpen } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { CustomButtonsBar } from '@/components/custom-nav-buttons'
 import { Button } from '@/components/ui/button'
 import { useStatus } from '@/hooks/use-status'
 
-import { HeroTerminalDemo } from '../hero-terminal-demo'
+import { GalaxyScene } from '../galaxy-scene'
 
 interface HeroProps {
   className?: string
@@ -80,52 +81,42 @@ export function Hero(props: HeroProps) {
   }
 
   return (
-    <section className='relative z-10 overflow-hidden px-6 pt-24 pb-16 md:pt-32 md:pb-24 lg:pt-36 lg:pb-28'>
-      {/* Radial gradient background */}
-      <div
-        aria-hidden
-        className='pointer-events-none absolute inset-0 -z-10 opacity-25 dark:opacity-[0.12]'
-        style={{
-          background: [
-            'radial-gradient(ellipse 60% 50% at 20% 20%, oklch(0.72 0.18 250 / 80%) 0%, transparent 70%)',
-            'radial-gradient(ellipse 50% 40% at 80% 15%, oklch(0.65 0.15 200 / 60%) 0%, transparent 70%)',
-            'radial-gradient(ellipse 40% 35% at 40% 80%, oklch(0.70 0.12 280 / 40%) 0%, transparent 70%)',
-          ].join(', '),
-        }}
-      />
-      {/* Grid pattern */}
-      <div
-        aria-hidden
-        className='absolute inset-0 -z-10 bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_30%,black_20%,transparent_100%)] bg-[size:4rem_4rem] opacity-[0.08]'
-      />
+    <section className='relative z-10 flex min-h-svh items-center overflow-hidden px-6 pt-28 pb-16 lg:pt-24'>
+      <div aria-hidden className='absolute inset-0 -z-10'>
+        <GalaxyScene />
+        <div className='space-grid absolute inset-0 opacity-30' />
+        {/* Keeps hero copy readable where the galaxy sits behind it (small screens). */}
+        <div className='from-background/80 via-background/40 lg:from-background/60 absolute inset-0 bg-gradient-to-r to-transparent lg:via-transparent' />
+        <div className='from-background absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t to-transparent' />
+      </div>
 
-      <div className='mx-auto grid max-w-6xl grid-cols-1 items-start gap-12 lg:grid-cols-12 lg:gap-8'>
+      <div className='mx-auto grid w-full max-w-6xl grid-cols-1 items-center gap-12 lg:grid-cols-12 lg:gap-8'>
         {/* Left Column: Title, description, action buttons and application support */}
         <div className='flex flex-col items-start text-left lg:col-span-6'>
           {/* Top Pill Badge */}
           <div
-            className='landing-animate-fade-up mb-5 inline-flex items-center gap-1.5 rounded-full border border-blue-500/20 bg-blue-500/5 px-3 py-1.5 text-[11px] font-medium text-blue-600 opacity-0 shadow-xs dark:border-blue-400/20 dark:bg-blue-400/5 dark:text-blue-400'
+            className='landing-animate-fade-up mb-5 inline-flex items-center gap-2 rounded-full border border-sky-300/25 bg-sky-400/10 px-3 py-1.5 font-mono text-[11px] font-medium tracking-wider text-sky-200 uppercase opacity-0 backdrop-blur-sm'
             style={{ animationDelay: '0ms' }}
           >
             <span className='relative flex size-1.5'>
-              <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75' />
-              <span className='relative inline-flex size-1.5 rounded-full bg-blue-500 dark:bg-blue-400' />
+              <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-300 opacity-75' />
+              <span className='relative inline-flex size-1.5 rounded-full bg-sky-300' />
             </span>
             <span>{t('AI Application Infrastructure Foundation')}</span>
           </div>
 
           <h1
-            className='landing-animate-fade-up text-[clamp(2.25rem,4.5vw,3.25rem)] leading-[1.15] font-bold tracking-tight'
+            className='landing-animate-fade-up text-[clamp(2.4rem,5vw,3.75rem)] leading-[1.1] font-bold tracking-tight'
             style={{ animationDelay: '60ms' }}
           >
             {t('Unified API Gateway for')}
             <br />
-            <span className='bg-gradient-to-r from-blue-400 via-violet-400 to-purple-500 bg-clip-text text-transparent'>
+            <span className='space-gradient-text'>
               {t('Vast Range of AI Models')}
             </span>
           </h1>
           <p
-            className='landing-animate-fade-up text-muted-foreground/80 mt-5 max-w-xl text-base leading-relaxed opacity-0 md:text-[15px]'
+            className='landing-animate-fade-up text-muted-foreground mt-5 max-w-xl text-base leading-relaxed opacity-0 md:text-[15px]'
             style={{ animationDelay: '120ms' }}
           >
             {t(
@@ -140,7 +131,7 @@ export function Hero(props: HeroProps) {
             {props.isAuthenticated ? (
               <>
                 <Button
-                  className='group h-11 rounded-lg px-5 text-sm font-medium'
+                  className='group h-11 rounded-lg px-5 text-sm font-medium shadow-[0_0_24px_-4px_oklch(0.7_0.17_250/70%)]'
                   render={<Link to='/dashboard' />}
                 >
                   {t('Go to Dashboard')}
@@ -151,7 +142,7 @@ export function Hero(props: HeroProps) {
             ) : (
               <>
                 <Button
-                  className='group h-11 rounded-lg px-5 text-sm font-medium'
+                  className='group h-11 rounded-lg px-5 text-sm font-medium shadow-[0_0_24px_-4px_oklch(0.7_0.17_250/70%)]'
                   render={<Link to='/sign-up' />}
                 >
                   {t('Get Started')}
@@ -169,16 +160,47 @@ export function Hero(props: HeroProps) {
             )}
           </div>
 
+          <CustomButtonsBar placement='home' className='mt-4' />
+
+          {/* Interconnected galaxy clusters visual legend */}
+          <div
+            className='landing-animate-fade-up mt-6 flex flex-wrap items-center gap-2 opacity-0'
+            style={{ animationDelay: '210ms' }}
+          >
+            {[
+              {
+                label: t('Core Gateway'),
+                dot: 'bg-sky-300 shadow-[0_0_8px_#7dd3fc]',
+              },
+              {
+                label: t('Azure Cluster'),
+                dot: 'bg-teal-300 shadow-[0_0_8px_#5eead4]',
+              },
+              {
+                label: t('Nebula Cluster'),
+                dot: 'bg-fuchsia-300 shadow-[0_0_8px_#f0abfc]',
+              },
+            ].map((node) => (
+              <span
+                key={node.label}
+                className='inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 font-mono text-[10px] tracking-wider text-slate-300/90 backdrop-blur-sm'
+              >
+                <span className={`size-1.5 rounded-full ${node.dot}`} />
+                {node.label}
+              </span>
+            ))}
+          </div>
+
           {/* Supported Apps (参考图二样式，进行卡片化和信息扩充设计，增加视觉高度) */}
           <div
             className='landing-animate-fade-up mt-10 w-full max-w-xl opacity-0'
             style={{ animationDelay: '240ms' }}
           >
             <div className='mb-4 flex flex-col gap-1'>
-              <span className='text-muted-foreground/50 text-[10px] font-bold tracking-[0.15em] uppercase'>
+              <span className='text-muted-foreground/70 font-mono text-[10px] font-bold tracking-[0.15em] uppercase'>
                 {t('Supported Applications')}
               </span>
-              <p className='text-muted-foreground/60 text-xs leading-relaxed'>
+              <p className='text-muted-foreground text-xs leading-relaxed'>
                 {t(
                   'Supports one-click configuration and perfectly adapts to NewAPI multi-protocol configuration.'
                 )}
@@ -232,13 +254,11 @@ export function Hero(props: HeroProps) {
           </div>
         </div>
 
-        {/* Right Column: Hero Terminal API Demo */}
+        {/* Right column is left open on large screens so the galaxy reads as the hero visual. */}
         <div
-          className='landing-animate-fade-up flex w-full justify-center opacity-0 lg:col-span-6'
-          style={{ animationDelay: '320ms' }}
-        >
-          <HeroTerminalDemo className='mt-8 lg:mt-0' />
-        </div>
+          aria-hidden
+          className='hidden min-h-[28rem] lg:col-span-6 lg:block'
+        />
       </div>
     </section>
   )

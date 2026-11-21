@@ -221,4 +221,43 @@ describe('API key group combobox Auto effect', () => {
     expect(within(autoOption).getByText('Auto')).toBeInTheDocument()
     setReducedMotion(false)
   })
+
+  test('supports sorting dedicated groups by lowest ratio and selecting via quick chips', () => {
+    setReducedMotion(false)
+    const unsortedOptions = [
+      { value: 'auto', label: 'auto', desc: 'Global automatic routing', ratio: '自动' },
+      { value: 'vip', label: 'vip', desc: 'Priority group', ratio: 3 },
+      { value: 'eco', label: 'eco', desc: 'Economy group', ratio: 0.5 },
+      { value: 'default', label: 'default', desc: 'User group', ratio: 1 },
+    ]
+
+    function SortableHarness() {
+      const [val, setVal] = useState('auto')
+      return (
+        <I18nextProvider i18n={i18n}>
+          <ApiKeyGroupCombobox
+            options={unsortedOptions}
+            value={val}
+            onValueChange={setVal}
+            showQuickChips
+          />
+          <output data-testid='selected-group'>{val}</output>
+        </I18nextProvider>
+      )
+    }
+
+    const { container } = render(<SortableHarness />)
+    fireEvent.click(getTrigger())
+    fireEvent.click(screen.getByRole('button', { name: 'Default order' }))
+
+    const items = [
+      ...document.querySelectorAll<HTMLElement>('[data-slot="command-item"]'),
+    ].map((item) => item.getAttribute('data-value'))
+    expect(items).toEqual(['auto', 'eco', 'default', 'vip'])
+
+    const quickChips = container.querySelector('[data-slot="group-quick-chips"]')
+    expect(quickChips).toBeInTheDocument()
+    fireEvent.click(within(quickChips as HTMLElement).getByRole('button', { name: /eco/i }))
+    expect(within(container).getByTestId('selected-group')).toHaveTextContent('eco')
+  })
 })

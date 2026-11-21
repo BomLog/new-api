@@ -411,6 +411,24 @@ func UpdateOption(c *gin.Context) {
 			common.ApiError(c, err)
 			return
 		}
+	case "console_setting.channel_probe_targets":
+		err = console_setting.ValidateConsoleSettings(option.Value.(string), "ChannelProbeTargets")
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	case "console_setting.channel_probe_options":
+		err = console_setting.ValidateConsoleSettings(option.Value.(string), "ChannelProbeOptions")
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	case "console_setting.channel_probe_interval_minutes":
+		val, convErr := strconv.Atoi(strings.TrimSpace(option.Value.(string)))
+		if convErr != nil || val < 1 || val > 1440 {
+			common.ApiErrorMsg(c, "Channel probe interval must be between 1 and 1440 minutes")
+			return
+		}
 	}
 	if model.IsPasskeyDomainOption(option.Key) {
 		change, updateErr := model.UpdatePasskeyDomainOptions(map[string]string{option.Key: option.Value.(string)}, false, "")

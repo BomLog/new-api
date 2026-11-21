@@ -423,13 +423,15 @@ For commercial licensing, please contact support@quantumnous.com
  *
  * Opt-outs:
  *   - `default`: keeps neutral surfaces from :root.
+ *   - `galaxy`: defines translucent cosmic surfaces so the live multi-galaxy
+ *     ambient backdrop shines softly through cards, headers, and sidebars.
  *   - `anthropic`: warm cream surfaces are a brand choice, NOT a primary-mix
  *     derivation (the Anthropic system deliberately uses warm neutrals for
  *     cards/borders rather than tinting them with the clay accent).
  *   - `simple-large`: keeps intentionally neutral, high-contrast surfaces. */
 [data-theme-preset]:not([data-theme-preset='default']):not(
-  [data-theme-preset='anthropic']
-):not([data-theme-preset='simple-large']) {
+  [data-theme-preset='galaxy']
+):not([data-theme-preset='anthropic']):not([data-theme-preset='simple-large']) {
   --card: color-mix(in oklch, var(--primary) 3%, var(--background));
   --popover: color-mix(in oklch, var(--primary) 5%, var(--background));
   --muted: color-mix(in oklch, var(--primary) 7%, var(--background));
@@ -453,8 +455,10 @@ For commercial licensing, please contact support@quantumnous.com
 }
 .dark
   [data-theme-preset]:not([data-theme-preset='default']):not(
-    [data-theme-preset='anthropic']
-  ):not([data-theme-preset='simple-large']) {
+    [data-theme-preset='galaxy']
+  ):not([data-theme-preset='anthropic']):not(
+    [data-theme-preset='simple-large']
+  ) {
   --card: color-mix(in oklch, var(--primary) 8%, var(--background));
   --popover: color-mix(in oklch, var(--primary) 12%, var(--background));
   --muted: color-mix(in oklch, var(--primary) 12%, var(--background));
@@ -469,6 +473,98 @@ For commercial licensing, please contact support@quantumnous.com
   --sidebar: color-mix(in oklch, var(--primary) 5%, var(--background));
   --sidebar-accent: color-mix(in oklch, var(--primary) 18%, var(--background));
   --sidebar-border: color-mix(in oklch, var(--primary) 22%, var(--background));
+}
+
+/* ── Cosmic Galaxy ────────────────────────────────────────────────────── */
+/* Deep-space interconnected galaxy palette. Translucent surfaces let the
+ * ambient WebGL multi-galaxy backdrop shimmer gently through cards and
+ * navigation while maintaining WCAG AA contrast on all text tokens. */
+[data-theme-preset='galaxy'] {
+  --background: oklch(0.968 0.012 260);
+  --foreground: oklch(0.19 0.03 265);
+  --card: oklch(0.988 0.008 260 / 82%);
+  --card-foreground: oklch(0.19 0.03 265);
+  --popover: oklch(0.99 0.008 260 / 94%);
+  --popover-foreground: oklch(0.19 0.03 265);
+
+  --primary: oklch(0.53 0.21 258);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.6 0.19 295);
+  --secondary-foreground: oklch(0.99 0 0);
+  --muted: oklch(0.925 0.018 262 / 82%);
+  --muted-foreground: oklch(0.45 0.035 264);
+  --accent: oklch(0.91 0.032 262 / 85%);
+  --accent-foreground: oklch(0.2 0.035 265);
+
+  --border: oklch(0.76 0.045 265 / 45%);
+  --input: oklch(0.78 0.04 265 / 55%);
+  --ring: oklch(0.56 0.21 258);
+
+  --chart-1: oklch(0.55 0.21 252);
+  --chart-2: oklch(0.62 0.19 295);
+  --chart-3: oklch(0.66 0.15 205);
+  --chart-4: oklch(0.68 0.18 335);
+  --chart-5: oklch(0.76 0.14 70);
+
+  --sidebar: oklch(0.96 0.016 262 / 84%);
+  --sidebar-foreground: oklch(0.2 0.03 265);
+  --sidebar-primary: oklch(0.53 0.21 258);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.9 0.032 265 / 80%);
+  --sidebar-accent-foreground: oklch(0.19 0.03 265);
+  --sidebar-border: oklch(0.76 0.045 265 / 40%);
+  --sidebar-ring: oklch(0.56 0.21 258);
+
+  --radius: 0.75rem;
+}
+.dark [data-theme-preset='galaxy'] {
+  --background: oklch(0.125 0.032 268);
+  --foreground: oklch(0.955 0.012 250);
+  --card: oklch(0.185 0.038 268 / 76%);
+  --card-foreground: oklch(0.955 0.012 250);
+  --popover: oklch(0.195 0.04 268 / 92%);
+  --popover-foreground: oklch(0.955 0.012 250);
+
+  --primary: oklch(0.73 0.165 236);
+  --primary-foreground: oklch(0.14 0.03 268);
+  --secondary: oklch(0.67 0.19 296);
+  --secondary-foreground: oklch(0.98 0.008 260);
+  --muted: oklch(0.22 0.036 268 / 72%);
+  --muted-foreground: oklch(0.76 0.035 256);
+  --accent: oklch(0.27 0.055 270 / 78%);
+  --accent-foreground: oklch(0.97 0.01 250);
+
+  --border: oklch(0.62 0.09 262 / 26%);
+  --input: oklch(0.62 0.09 262 / 32%);
+  --ring: oklch(0.73 0.165 236);
+
+  --chart-1: oklch(0.73 0.165 236);
+  --chart-2: oklch(0.7 0.19 296);
+  --chart-3: oklch(0.74 0.14 198);
+  --chart-4: oklch(0.74 0.17 338);
+  --chart-5: oklch(0.82 0.13 78);
+
+  --sidebar: oklch(0.145 0.034 268 / 78%);
+  --sidebar-foreground: oklch(0.94 0.015 255);
+  --sidebar-primary: oklch(0.73 0.165 236);
+  --sidebar-primary-foreground: oklch(0.14 0.03 268);
+  --sidebar-accent: oklch(0.26 0.055 272 / 76%);
+  --sidebar-accent-foreground: oklch(0.97 0.01 250);
+  --sidebar-border: oklch(0.62 0.09 262 / 24%);
+  --sidebar-ring: oklch(0.73 0.165 236);
+}
+[data-theme-preset='galaxy'] [data-slot='sidebar-inset'],
+[data-theme-preset='galaxy'] [data-slot='card'] {
+  backdrop-filter: blur(12px);
+}
+[data-theme-preset='galaxy'] [data-slot='sidebar-inset'],
+[data-theme-preset='galaxy'] [data-slot='public-layout']:not(.home-space) {
+  background: color-mix(in oklch, var(--background) 62%, transparent);
+}
+[data-theme-preset='galaxy'] [data-slot='card'] {
+  box-shadow:
+    0 12px 36px -22px oklch(0.55 0.18 270 / 35%),
+    inset 0 1px 0 oklch(0.85 0.08 240 / 16%);
 }
 
 /* ── Anthropic ────────────────────────────────────────────────────────── */

@@ -30,6 +30,14 @@ export const THEME_PRESETS = [
     swatches: ['oklch(0.72 0.18 250)', 'oklch(0.7 0.12 280)'],
   },
   {
+    // Interconnected cosmic galaxy preset: deep starfield canvas with
+    // aurora cyan and nebula violet accents, paired with a live ambient
+    // multi-galaxy backdrop.
+    value: 'galaxy',
+    name: 'Cosmic Galaxy',
+    swatches: ['oklch(0.68 0.19 235)', 'oklch(0.64 0.22 295)'],
+  },
+  {
     // Inspired by Anthropic's official brand language: warm cream canvas
     // (#faf9f5) paired with clay/coral (#d97757) as the single accent.
     // Swatches preview the canvas → accent gradient that defines the system.
