@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -412,6 +413,26 @@ func UnlockOrder(tradeNo string) {
 	createLock.Unlock()
 }
 
+func verifyEpayCallback(client *epay.Client, params map[string]string) (*epay.VerifyRes, error) {
+	expectedPartnerID := strings.TrimSpace(operation_setting.EpayId)
+	if expectedPartnerID == "" || strings.TrimSpace(params["pid"]) != expectedPartnerID {
+		return &epay.VerifyRes{VerifyStatus: false}, nil
+	}
+	return client.Verify(params)
+}
+
+func parsePositiveCallbackMoney(raw string) (decimal.Decimal, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return decimal.Zero, errors.New("empty callback amount")
+	}
+	money, err := decimal.NewFromString(trimmed)
+	if err != nil || money.LessThanOrEqual(decimal.Zero) {
+		return decimal.Zero, errors.New("invalid callback amount")
+	}
+	return money, nil
+}
+
 func EpayNotify(c *gin.Context) {
 	if !isEpayWebhookEnabled() {
 		logger.LogWarn(c.Request.Context(), common.LogText("Epay webhook rejected reason=webhook_disabled path=%q client_ip=%s", c.Request.RequestURI, c.ClientIP()))
@@ -455,7 +476,7 @@ func EpayNotify(c *gin.Context) {
 		}
 		return
 	}
-	verifyInfo, err := client.Verify(params)
+	verifyInfo, err := verifyEpayCallback(client, params)
 	if err != nil || !verifyInfo.VerifyStatus {
 		if _, writeErr := c.Writer.Write([]byte("fail")); writeErr != nil {
 			logger.LogError(c.Request.Context(), common.LogText("Epay webhook failed to write response path=%q client_ip=%s error=%q", c.Request.RequestURI, c.ClientIP(), writeErr.Error()))
@@ -470,17 +491,25 @@ func EpayNotify(c *gin.Context) {
 	logger.LogInfo(c.Request.Context(), common.LogText("Epay webhook signature verified trade_no=%s callback_type=%s trade_status=%s client_ip=%s verify_info=%q", verifyInfo.ServiceTradeNo, verifyInfo.Type, verifyInfo.TradeStatus, c.ClientIP(), common.GetJsonString(verifyInfo)))
 
 	if verifyInfo.TradeStatus == epay.StatusTradeSuccess {
+		paidMoney, moneyErr := parsePositiveCallbackMoney(verifyInfo.Money)
+		if moneyErr != nil {
+			logger.LogWarn(c.Request.Context(), common.LogText("Epay callback invalid money trade_no=%s money=%q client_ip=%s", verifyInfo.ServiceTradeNo, verifyInfo.Money, c.ClientIP()))
+			_, _ = c.Writer.Write([]byte("fail"))
+			return
+		}
 		// 进程内锁只是优化；重复/并发回调的正确性由 RechargeEpay 的
 		// 数据库行锁 + 事务内状态校验保证（多实例部署下同样安全）。
 		LockOrder(verifyInfo.ServiceTradeNo)
 		defer UnlockOrder(verifyInfo.ServiceTradeNo)
-		alreadyDone, err := model.RechargeEpay(verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP())
+		alreadyDone, err := model.RechargeEpayWithAmount(verifyInfo.ServiceTradeNo, verifyInfo.Type, paidMoney, c.ClientIP())
 		if err != nil {
 			switch {
 			case errors.Is(err, model.ErrTopUpNotFound):
 				logger.LogWarn(c.Request.Context(), common.LogText("Epay callback order not found trade_no=%s callback_type=%s client_ip=%s verify_info=%q", verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP(), common.GetJsonString(verifyInfo)))
 			case errors.Is(err, model.ErrPaymentMethodMismatch):
 				logger.LogWarn(c.Request.Context(), common.LogText("Epay order payment gateway mismatch trade_no=%s callback_type=%s client_ip=%s", verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP()))
+			case errors.Is(err, model.ErrPaymentAmountMismatch):
+				logger.LogWarn(c.Request.Context(), common.LogText("Epay order payment amount mismatch trade_no=%s callback_money=%q client_ip=%s", verifyInfo.ServiceTradeNo, verifyInfo.Money, c.ClientIP()))
 			case errors.Is(err, model.ErrTopUpStatusInvalid):
 				logger.LogWarn(c.Request.Context(), common.LogText("Epay order status invalid trade_no=%s callback_type=%s client_ip=%s", verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP()))
 			default:

@@ -1,12 +1,22 @@
 package model
 
 import (
+	"fmt"
+	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/glebarez/sqlite"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
 
 func insertUserForPaymentGuardTest(t *testing.T, id int, quota int) *User {
@@ -350,6 +360,328 @@ func TestRechargeEpayEnforcesFinalWalletQuotaLimit(t *testing.T) {
 			}
 			assert.Equal(t, tc.wantQuota, getUserQuotaForPaymentGuardTest(t, user.Id))
 			assert.Equal(t, tc.wantStatus, getTopUpStatusForPaymentGuardTest(t, order.TradeNo))
+		})
+	}
+}
+
+func TestRechargeAmountGuardsAndCreemPreservesEmptyEmail(t *testing.T) {
+	truncateTables(t)
+
+	oldQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() { common.QuotaPerUnit = oldQuotaPerUnit })
+
+	user := insertUserForPaymentGuardTest(t, 601, 0)
+	epayOrder := createEpayTestOrder(t, user.Id, "EPAY_UNDERPAID", PaymentProviderEpay, common.TopUpStatusPending)
+	_, err := RechargeEpayWithAmount(epayOrder.TradeNo, "alipay", decimal.NewFromFloat(0.01), "127.0.0.1")
+	require.ErrorIs(t, err, ErrPaymentAmountMismatch)
+	assert.Equal(t, 0, getUserQuotaForPaymentGuardTest(t, user.Id))
+
+	insertTopUpForPaymentGuardTest(t, "WAFFO_UNDERPAID", user.Id, PaymentProviderWaffo)
+	err = RechargeWaffoWithAmount("WAFFO_UNDERPAID", decimal.NewFromFloat(0.01), "127.0.0.1")
+	require.Error(t, err)
+	assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, "WAFFO_UNDERPAID"))
+
+	insertTopUpForPaymentGuardTest(t, "PANCAKE_UNDERPAID", user.Id, PaymentProviderWaffoPancake)
+	err = RechargeWaffoPancakeWithAmount("PANCAKE_UNDERPAID", decimal.NewFromFloat(0.01))
+	require.Error(t, err)
+	assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, "PANCAKE_UNDERPAID"))
+
+	plan := insertSubscriptionPlanForPaymentGuardTest(t, 602)
+	insertSubscriptionOrderForPaymentGuardTest(t, "SUB_UNDERPAID", user.Id, plan.Id, PaymentProviderEpay)
+	err = CompleteSubscriptionOrderWithAmount("SUB_UNDERPAID", `{}`, PaymentProviderEpay, "alipay", decimal.NewFromFloat(0.01))
+	require.ErrorIs(t, err, ErrPaymentAmountMismatch)
+	assert.Zero(t, countUserSubscriptionsForPaymentGuardTest(t, user.Id))
+
+	creemTopUp := &TopUp{
+		UserId:          user.Id,
+		Amount:          1000,
+		Money:           5.00,
+		TradeNo:         "CREEM_NO_EMAIL_OVERWRITE",
+		PaymentMethod:   PaymentMethodCreem,
+		PaymentProvider: PaymentProviderCreem,
+		Status:          common.TopUpStatusPending,
+		CreateTime:      time.Now().Unix(),
+	}
+	require.NoError(t, creemTopUp.Insert())
+	require.NoError(t, RechargeCreem(creemTopUp.TradeNo, "victim@example.com", "Attacker", "127.0.0.1"))
+	assert.Equal(t, 1000, getUserQuotaForPaymentGuardTest(t, user.Id))
+
+	var reloadedUser User
+	require.NoError(t, DB.Where("id = ?", user.Id).First(&reloadedUser).Error)
+	assert.Empty(t, reloadedUser.Email, "Creem callback must not overwrite unverified email onto user")
+}
+
+func TestRefundSubscriptionPreConsumeSingleConnAndAtomicSetup(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.AutoMigrate(&Setup{}, &Option{}, &SubscriptionPreConsumeRecord{}))
+
+	user := insertUserForPaymentGuardTest(t, 701, 0)
+	plan := insertSubscriptionPlanForPaymentGuardTest(t, 702)
+	now := GetDBTimestamp()
+	sub := &UserSubscription{
+		UserId:      user.Id,
+		PlanId:      plan.Id,
+		AmountTotal: 1000,
+		AmountUsed:  0,
+		StartTime:   now - 60,
+		EndTime:     now + 86400,
+		Status:      "active",
+		Source:      "admin",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	require.NoError(t, DB.Create(sub).Error)
+
+	res, err := PreConsumeUserSubscription("req-refund-deadlock-check", user.Id, "gpt-4o", 0, 250)
+	require.NoError(t, err)
+	assert.Equal(t, int64(250), res.AmountUsedAfter)
+
+	require.NoError(t, RefundSubscriptionPreConsume("req-refund-deadlock-check"))
+	// Idempotent second call must also succeed without error or negative usage.
+	require.NoError(t, RefundSubscriptionPreConsume("req-refund-deadlock-check"))
+
+	var reloadedSub UserSubscription
+	require.NoError(t, DB.Where("id = ?", sub.Id).First(&reloadedSub).Error)
+	assert.Zero(t, reloadedSub.AmountUsed)
+
+	// Verify CompleteInitialSetup claims Setup{ID: 1} atomically under concurrency.
+	require.NoError(t, DB.Exec("DELETE FROM setups").Error)
+	require.NoError(t, DB.Where("role = ?", common.RoleRootUser).Delete(&User{}).Error)
+
+	const workers = 6
+	var wg sync.WaitGroup
+	successes := make(chan bool, workers)
+	for i := range workers {
+		wg.Go(func() {
+			candidate := &User{
+				Username:    "rootrace" + string(rune('a'+i)),
+				Password:    "hashed",
+				Role:        common.RoleRootUser,
+				Status:      common.UserStatusEnabled,
+				DisplayName: "Root",
+			}
+			_, setupErr := CompleteInitialSetup(candidate, true, false)
+			successes <- (setupErr == nil)
+		})
+	}
+	wg.Wait()
+	close(successes)
+
+	winCount := 0
+	for ok := range successes {
+		if ok {
+			winCount++
+		}
+	}
+	assert.Equal(t, 1, winCount, "exactly one concurrent CompleteInitialSetup must succeed")
+
+	var rootCount int64
+	require.NoError(t, DB.Model(&User{}).Where("role = ?", common.RoleRootUser).Count(&rootCount).Error)
+	assert.Equal(t, int64(1), rootCount)
+}
+
+func TestPaymentSubscriptionAndSetupDatabaseMatrix(t *testing.T) {
+	dialects := []struct {
+		name common.DatabaseType
+		env  string
+	}{
+		{name: common.DatabaseTypeSQLite, env: ""},
+		{name: common.DatabaseTypeMySQL, env: "TEST_MYSQL_DSN"},
+		{name: common.DatabaseTypePostgreSQL, env: "TEST_POSTGRES_DSN"},
+	}
+
+	for _, dialect := range dialects {
+		t.Run(string(dialect.name), func(t *testing.T) {
+			prefix := fmt.Sprintf("sec_fix_%d_", time.Now().UnixNano()%1_000_000)
+			var driver gorm.Dialector
+			maxConns := 8
+			switch dialect.name {
+			case common.DatabaseTypeSQLite:
+				driver = sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", prefix))
+				maxConns = 1
+			case common.DatabaseTypeMySQL:
+				dsn := strings.TrimSpace(os.Getenv(dialect.env))
+				if dsn == "" {
+					t.Skip(dialect.env + " is not configured")
+				}
+				driver = mysql.Open(dsn)
+			case common.DatabaseTypePostgreSQL:
+				dsn := strings.TrimSpace(os.Getenv(dialect.env))
+				if dsn == "" {
+					t.Skip(dialect.env + " is not configured")
+				}
+				driver = postgres.New(postgres.Config{DSN: dsn, PreferSimpleProtocol: true})
+			}
+
+			db, err := gorm.Open(driver, &gorm.Config{
+				NamingStrategy: schema.NamingStrategy{TablePrefix: prefix},
+			})
+			require.NoError(t, err)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			sqlDB.SetMaxOpenConns(maxConns)
+
+			versionQuery := "SELECT version()"
+			if dialect.name == common.DatabaseTypeSQLite {
+				versionQuery = "SELECT sqlite_version()"
+			}
+			var dbVersion string
+			require.NoError(t, db.Raw(versionQuery).Scan(&dbVersion).Error)
+			t.Logf("verified dialect=%s version=%s", dialect.name, dbVersion)
+
+			modelsToMigrate := []any{
+				&User{},
+				&Option{},
+				&Setup{},
+				&TopUp{},
+				&SubscriptionPlan{},
+				&SubscriptionOrder{},
+				&UserSubscription{},
+				&SubscriptionPreConsumeRecord{},
+				&Log{},
+			}
+			// Run AutoMigrate twice to verify migration idempotency across all three engines.
+			require.NoError(t, db.AutoMigrate(modelsToMigrate...))
+			require.NoError(t, db.AutoMigrate(modelsToMigrate...))
+
+			prevDB, prevLogDB := DB, LOG_DB
+			prevMainType, prevLogType := common.MainDatabaseType(), common.LogDatabaseType()
+			oldQuotaPerUnit := common.QuotaPerUnit
+			DB, LOG_DB = db, db
+			common.SetDatabaseTypes(dialect.name, dialect.name)
+			common.QuotaPerUnit = 500000
+			initCol()
+
+			t.Cleanup(func() {
+				DB, LOG_DB = prevDB, prevLogDB
+				common.SetDatabaseTypes(prevMainType, prevLogType)
+				common.QuotaPerUnit = oldQuotaPerUnit
+				initCol()
+				if dialect.name != common.DatabaseTypeSQLite {
+					_ = db.Migrator().DropTable(modelsToMigrate...)
+				}
+				_ = sqlDB.Close()
+			})
+
+			// 1. Atomic CompleteInitialSetup under concurrency
+			const workers = 6
+			var wg sync.WaitGroup
+			wins := make(chan bool, workers)
+			for i := range workers {
+				wg.Go(func() {
+					u := &User{
+						Username:    fmt.Sprintf("root%d", i),
+						Password:    "hashed",
+						Role:        common.RoleRootUser,
+						Status:      common.UserStatusEnabled,
+						DisplayName: "Root",
+					}
+					_, sErr := CompleteInitialSetup(u, true, false)
+					wins <- (sErr == nil)
+				})
+			}
+			wg.Wait()
+			close(wins)
+			winTotal := 0
+			for w := range wins {
+				if w {
+					winTotal++
+				}
+			}
+			assert.Equal(t, 1, winTotal)
+
+			var rootUsers int64
+			require.NoError(t, db.Model(&User{}).Where("role = ?", common.RoleRootUser).Count(&rootUsers).Error)
+			assert.Equal(t, int64(1), rootUsers)
+
+			// 2. Payment amount guards + Creem does not overwrite empty email
+			buyer := &User{
+				Username: "buyer_matrix",
+				Password: "hashed",
+				Role:     common.RoleCommonUser,
+				Status:   common.UserStatusEnabled,
+				AffCode:  "BUYERMAT",
+			}
+			require.NoError(t, db.Create(buyer).Error)
+
+			epayTopUp := &TopUp{
+				UserId:          buyer.Id,
+				Amount:          2,
+				Money:           10.00,
+				TradeNo:         "MAT_EPAY_1",
+				PaymentMethod:   "alipay",
+				PaymentProvider: PaymentProviderEpay,
+				Status:          common.TopUpStatusPending,
+				CreateTime:      time.Now().Unix(),
+			}
+			require.NoError(t, epayTopUp.Insert())
+			_, err = RechargeEpayWithAmount("MAT_EPAY_1", "alipay", decimal.NewFromFloat(0.01), "127.0.0.1")
+			require.ErrorIs(t, err, ErrPaymentAmountMismatch)
+			alreadyDone, err := RechargeEpayWithAmount("MAT_EPAY_1", "alipay", decimal.NewFromFloat(10.00), "127.0.0.1")
+			require.NoError(t, err)
+			assert.False(t, alreadyDone)
+
+			creemTopUp := &TopUp{
+				UserId:          buyer.Id,
+				Amount:          250000,
+				Money:           5.00,
+				TradeNo:         "MAT_CREEM_1",
+				PaymentMethod:   PaymentMethodCreem,
+				PaymentProvider: PaymentProviderCreem,
+				Status:          common.TopUpStatusPending,
+				CreateTime:      time.Now().Unix(),
+			}
+			require.NoError(t, creemTopUp.Insert())
+			require.NoError(t, RechargeCreem("MAT_CREEM_1", "unverified@attacker.test", "Attacker", "127.0.0.1"))
+
+			var refreshedBuyer User
+			require.NoError(t, db.Where("id = ?", buyer.Id).First(&refreshedBuyer).Error)
+			assert.Empty(t, refreshedBuyer.Email)
+			assert.Equal(t, 1_250_000, refreshedBuyer.Quota)
+
+			// 3. Subscription pre-consume + refund (single-connection safe on SQLite, row-locked on MySQL/PostgreSQL)
+			plan := &SubscriptionPlan{
+				Title:         "Matrix Plan",
+				PriceAmount:   19.99,
+				Currency:      "USD",
+				DurationUnit:  SubscriptionDurationMonth,
+				DurationValue: 1,
+				Enabled:       true,
+				TotalAmount:   5000,
+			}
+			require.NoError(t, db.Create(plan).Error)
+			now := GetDBTimestamp()
+			sub := &UserSubscription{
+				UserId:      buyer.Id,
+				PlanId:      plan.Id,
+				AmountTotal: 5000,
+				AmountUsed:  0,
+				StartTime:   now - 60,
+				EndTime:     now + 86400,
+				Status:      "active",
+				Source:      "order",
+				CreatedAt:   now,
+				UpdatedAt:   now,
+			}
+			require.NoError(t, db.Create(sub).Error)
+
+			preRes, err := PreConsumeUserSubscription("mat-sub-req-1", buyer.Id, "gpt-4o", 0, 400)
+			require.NoError(t, err)
+			assert.Equal(t, int64(400), preRes.AmountUsedAfter)
+			require.NoError(t, RefundSubscriptionPreConsume("mat-sub-req-1"))
+			require.NoError(t, RefundSubscriptionPreConsume("mat-sub-req-1"))
+
+			var refreshedSub UserSubscription
+			require.NoError(t, db.Where("id = ?", sub.Id).First(&refreshedSub).Error)
+			assert.Zero(t, refreshedSub.AmountUsed)
+
+			// 4. Re-run AutoMigrate on populated tables to verify upgrade idempotency and constraint preservation
+			require.NoError(t, db.AutoMigrate(modelsToMigrate...))
+			require.Error(t, db.Create(&Setup{ID: 1, Version: "dup", InitializedAt: now}).Error)
+			require.Error(t, db.Create(&User{Username: "dup_aff", Password: "h", AffCode: "BUYERMAT"}).Error)
+			require.NoError(t, db.Where("id = ?", buyer.Id).First(&refreshedBuyer).Error)
+			assert.Equal(t, 1_250_000, refreshedBuyer.Quota)
 		})
 	}
 }

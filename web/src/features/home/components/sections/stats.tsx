@@ -16,130 +16,169 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useRef, useEffect, useCallback } from 'react'
+import { motion } from 'motion/react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber } from '@/lib/format'
+import { cn } from '@/lib/utils'
 
-interface CounterProps {
-  end: number
-  suffix?: string
-  prefix?: string
-  duration?: number
-  decimals?: number
-  locale: string
-}
-
-function Counter(props: CounterProps) {
-  const {
-    end,
-    suffix = '',
-    prefix = '',
-    duration = 1600,
-    decimals = 0,
-    locale,
-  } = props
-  const ref = useRef<HTMLSpanElement>(null)
-  const startedRef = useRef(false)
-
-  const formatValue = useCallback(
-    (v: number) =>
-      decimals > 0 ? v.toFixed(decimals) : formatNumber(Math.round(v), locale),
-    [decimals, locale]
-  )
-
-  const animate = useCallback(() => {
-    const el = ref.current
-    if (!el) return
-    const start = performance.now()
-    const step = (now: number) => {
-      const progress = Math.min((now - start) / duration, 1)
-      const eased = 1 - Math.pow(1 - progress, 3)
-      el.textContent = `${prefix}${formatValue(eased * end)}${suffix}`
-      if (progress < 1) requestAnimationFrame(step)
-    }
-    requestAnimationFrame(step)
-  }, [end, duration, prefix, suffix, formatValue])
-
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
-    if (mq.matches) {
-      el.textContent = `${prefix}${formatValue(end)}${suffix}`
-      return
-    }
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting && !startedRef.current) {
-          startedRef.current = true
-          animate()
-          observer.unobserve(el)
-        }
-      },
-      { threshold: 0.5 }
-    )
-
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [animate, end, prefix, suffix, formatValue])
-
-  return (
-    <span ref={ref} className='tabular-nums'>
-      {prefix}0{suffix}
-    </span>
-  )
-}
+import { BoomEmblem, BoomShockwaveBurst } from '../boom-brand-mark'
 
 interface StatsProps {
   className?: string
 }
 
 interface StatItem {
-  end: number
+  id: string
+  value: number
   suffix: string
   label: string
-  decimals?: number
 }
 
-export function Stats(_props: StatsProps) {
+interface AnimatedStatPodProps {
+  item: StatItem
+  index: number
+  locale: string | undefined
+}
+
+function AnimatedStatPod(props: AnimatedStatPodProps) {
+  const ref = useRef<HTMLDivElement>(null)
+  const hasAnimatedRef = useRef(false)
+  const [burstKey, setBurstKey] = useState<number>(0)
+  const [displayValue, setDisplayValue] = useState<number>(() =>
+    typeof IntersectionObserver === 'undefined' ? props.item.value : 0
+  )
+
+  useEffect(() => {
+    if (typeof IntersectionObserver === 'undefined') {
+      setDisplayValue(props.item.value)
+      return
+    }
+
+    const element = ref.current
+    if (!element) return
+
+    let frameId = 0
+    const durationMs = 1050
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting && !hasAnimatedRef.current) {
+          hasAnimatedRef.current = true
+          const startTime = performance.now()
+          const tick = (now: number) => {
+            const progress = Math.min((now - startTime) / durationMs, 1)
+            const eased = 1 - Math.pow(1 - progress, 3)
+            setDisplayValue(Math.round(eased * props.item.value))
+            if (progress < 1) {
+              frameId = requestAnimationFrame(tick)
+            } else {
+              setBurstKey((prev) => prev + 1)
+            }
+          }
+          frameId = requestAnimationFrame(tick)
+          observer.unobserve(element)
+        }
+      },
+      { threshold: 0.35 }
+    )
+
+    observer.observe(element)
+    return () => {
+      observer.disconnect()
+      if (frameId) cancelAnimationFrame(frameId)
+    }
+  }, [props.item.value])
+
+  return (
+    <motion.div
+      ref={ref}
+      onMouseEnter={() => setBurstKey((prev) => prev + 1)}
+      initial={{ opacity: 0, y: 14 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, amount: 0.4 }}
+      transition={{
+        duration: 0.45,
+        delay: props.index * 0.06,
+        ease: [0.22, 1, 0.36, 1],
+      }}
+      className='group relative flex flex-col overflow-hidden rounded-xl border border-white/10 bg-[#0b0f1d]/85 p-4 transition-colors duration-300 hover:border-orange-400/45 sm:p-5'
+    >
+      {/* Top cosmic supernova plasma bar */}
+      <motion.span
+        aria-hidden='true'
+        initial={{ scaleX: 0 }}
+        whileInView={{ scaleX: 1 }}
+        viewport={{ once: true, amount: 0.4 }}
+        transition={{
+          duration: 0.55,
+          delay: props.index * 0.07,
+          ease: [0.22, 1, 0.36, 1],
+        }}
+        className='absolute inset-x-0 top-0 h-0.5 origin-left bg-linear-to-r from-amber-300 via-rose-500 to-sky-400 opacity-75 transition-opacity group-hover:opacity-100'
+      />
+
+      <div className='flex items-start justify-between gap-2'>
+        <span className='relative inline-flex items-baseline text-2xl font-semibold tracking-tight text-white tabular-nums sm:text-3xl'>
+          <BoomShockwaveBurst burstKey={burstKey} size='sm' />
+          <span>{formatNumber(displayValue, props.locale)}</span>
+          <span className='ml-0.5 text-amber-300'>{props.item.suffix}</span>
+        </span>
+        <BoomEmblem className='size-3.5 opacity-45 transition-transform duration-300 group-hover:scale-125 group-hover:rotate-45 group-hover:opacity-100' />
+      </div>
+
+      <span className='mt-1.5 text-xs text-slate-400 sm:text-sm'>
+        {props.item.label}
+      </span>
+    </motion.div>
+  )
+}
+
+export function Stats(props: StatsProps) {
   const { i18n, t } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
 
   const stats: StatItem[] = [
-    { end: 50, suffix: '+', label: t('upstream services integrated') },
-    { end: 100, suffix: '+', label: t('model billing support') },
-    { end: 50, suffix: '+', label: t('compatible API routes') },
-    { end: 10, suffix: '+', label: t('scheduling controls') },
+    {
+      id: 'upstream',
+      value: 50,
+      suffix: '+',
+      label: t('upstream services integrated'),
+    },
+    {
+      id: 'billing',
+      value: 100,
+      suffix: '+',
+      label: t('model billing support'),
+    },
+    { id: 'routes', value: 50, suffix: '+', label: t('compatible API routes') },
+    {
+      id: 'scheduling',
+      value: 10,
+      suffix: '+',
+      label: t('scheduling controls'),
+    },
   ]
 
   return (
-    <div className='relative z-10 px-6'>
-      <div className='space-panel mx-auto max-w-6xl px-6 py-8 md:py-10'>
-        <div className='grid grid-cols-2 gap-8 md:grid-cols-4 md:gap-12'>
-          {stats.map((s) => (
-            <div
-              key={s.label}
-              className='flex flex-col items-center text-center'
-            >
-              <span className='space-gradient-text font-mono text-3xl font-bold tracking-tight md:text-4xl'>
-                <Counter
-                  end={s.end}
-                  suffix={s.suffix}
-                  decimals={s.decimals}
-                  locale={locale}
-                />
-              </span>
-              <span className='text-muted-foreground mt-2 text-xs tracking-wide'>
-                {s.label}
-              </span>
-            </div>
-          ))}
-        </div>
+    <section
+      className={cn(
+        'border-y border-white/10 bg-white/[0.02] px-6 py-8 md:py-10',
+        props.className
+      )}
+    >
+      <div className='mx-auto grid max-w-6xl grid-cols-2 gap-4 md:grid-cols-4 md:gap-5'>
+        {stats.map((item, idx) => (
+          <AnimatedStatPod
+            key={item.id}
+            item={item}
+            index={idx}
+            locale={locale}
+          />
+        ))}
       </div>
-    </div>
+    </section>
   )
 }

@@ -62,6 +62,12 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		imageCounter.Observe(&responsesResponse.Output[i], &i)
 	}
 	imageCounter.Commit(info)
+	if !dto.HasOpenAIUsageTokens(usage) &&
+		!hasPositiveUsageCost(usage.Cost) &&
+		!responsesResponseHasOutput(&responsesResponse) &&
+		!info.HasResponseBillableToolCalls() {
+		info.MarkEmptyResponse()
+	}
 
 	return usage, nil
 }
@@ -102,6 +108,36 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, info.StreamStatus)
 	info.StreamStatus.RequireTerminal()
 	return accumulator.Finish(), nil
+}
+
+func responsesResponseHasOutput(resp *dto.OpenAIResponsesResponse) bool {
+	if resp == nil {
+		return false
+	}
+	if service.ExtractOutputTextFromResponses(resp) != "" {
+		return true
+	}
+	for i := range resp.Output {
+		item := &resp.Output[i]
+		switch item.Type {
+		case dto.BuildInCallFunctionCall, dto.BuildInCallWebSearchCall, dto.BuildInCallFileSearchCall, "custom_tool_call", "mcp_call", "code_interpreter_call", "computer_call":
+			return true
+		case dto.ResponsesOutputTypeImageGenerationCall:
+			if item.Result != "" {
+				return true
+			}
+		case "reasoning":
+			if len(item.Summary) > 0 {
+				return true
+			}
+		}
+		for j := range item.Content {
+			if item.Content[j].Text != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func rewriteSGLangResponsesCreatedAt(info *relaycommon.RelayInfo, payload []byte, path string, createdAt dto.IntValue) []byte {

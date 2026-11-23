@@ -12,7 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const TaskArtifactAccessContextKey = "task_artifact_access"
+const TaskArtifactAccessContextKey = service.TaskArtifactAccessContextKey
 
 const (
 	taskArtifactAccessRawContextKey       = "task_artifact_access_raw"
@@ -108,6 +108,15 @@ func (l *taskArtifactAccessLimiter) acquire(ip, taskID, artifactKey string) (fun
 	}, true
 }
 
+func isMidjourneyImageContentPath(path string) bool {
+	if strings.HasPrefix(path, "/mj/image/") {
+		return strings.TrimPrefix(path, "/mj/image/") != ""
+	}
+	trimmed := strings.TrimPrefix(path, "/")
+	mode, rest, ok := strings.Cut(trimmed, "/")
+	return ok && mode != "" && strings.HasPrefix(rest, "mj/image/") && strings.TrimPrefix(rest, "mj/image/") != ""
+}
+
 func redactTaskArtifactAccessQuery() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
@@ -116,7 +125,8 @@ func redactTaskArtifactAccessQuery() gin.HandlerFunc {
 			strings.HasSuffix(path, "/content")
 		isLegacyVideoContent := strings.HasPrefix(path, "/v1/videos/") &&
 			strings.HasSuffix(path, "/content")
-		if !isArtifactContent && !isLegacyVideoContent {
+		isMjImageContent := isMidjourneyImageContentPath(path)
+		if !isArtifactContent && !isLegacyVideoContent && !isMjImageContent {
 			c.Next()
 			return
 		}
@@ -172,6 +182,16 @@ func popTaskArtifactAccessQuery(request *http.Request) (string, bool, bool) {
 // TokenOrTaskArtifactAccessAuth accepts the normal relay API Bearer token or a
 // route-bound capability. Capabilities are verified before any database read.
 func TokenOrTaskArtifactAccessAuth(taskParam, artifactParam string) gin.HandlerFunc {
+	return tokenOrTaskArtifactAuth(taskParam, artifactParam, "")
+}
+
+// TokenOrTaskArtifactStaticAuth accepts the normal relay API Bearer token or a
+// route-bound capability with a fixed artifact key (e.g. Midjourney image proxy).
+func TokenOrTaskArtifactStaticAuth(taskParam, staticArtifactKey string) gin.HandlerFunc {
+	return tokenOrTaskArtifactAuth(taskParam, "", staticArtifactKey)
+}
+
+func tokenOrTaskArtifactAuth(taskParam, artifactParam, staticArtifactKey string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Cache-Control", "private, no-store")
 
@@ -191,7 +211,10 @@ func TokenOrTaskArtifactAccessAuth(taskParam, artifactParam string) gin.HandlerF
 		}
 
 		taskID := c.Param(taskParam)
-		artifactKey := c.Param(artifactParam)
+		artifactKey := staticArtifactKey
+		if artifactParam != "" {
+			artifactKey = c.Param(artifactParam)
+		}
 		ip := c.ClientIP()
 		if ip == "" {
 			ip = "unknown"

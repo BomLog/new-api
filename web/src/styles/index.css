@@ -790,3 +790,295 @@ For commercial licensing, please contact support@quantumnous.com
   mask-composite: exclude;
   pointer-events: none;
 }
+
+/* ── Commercial Home Page Architectural Grid & Motion Utilities ── */
+.home-arch-grid {
+  background-image:
+    linear-gradient(
+      to right,
+      color-mix(in oklch, var(--foreground) 7%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(in oklch, var(--foreground) 7%, transparent) 1px,
+      transparent 1px
+    );
+  background-size: 40px 40px;
+}
+
+.home-arch-grid-bright {
+  background-image:
+    linear-gradient(
+      to right,
+      color-mix(in oklch, var(--primary) 26%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(in oklch, var(--primary) 26%, transparent) 1px,
+      transparent 1px
+    );
+  background-size: 40px 40px;
+}
+
+@keyframes home-marquee {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+.home-marquee-track {
+  display: flex;
+  width: max-content;
+  animation: home-marquee 28s linear infinite;
+  will-change: transform;
+}
+
+.home-marquee-track:hover {
+  animation-play-state: paused;
+}
+
+@keyframes home-marquee-reverse {
+  from {
+    transform: translate3d(-50%, 0, 0);
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.home-marquee-track-reverse {
+  display: flex;
+  width: max-content;
+  animation: home-marquee-reverse 32s linear infinite;
+  will-change: transform;
+}
+
+.home-marquee-track-reverse:hover {
+  animation-play-state: paused;
+}
+
+@keyframes home-beam-dash {
+  from {
+    stroke-dashoffset: 24;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.home-beam-line {
+  stroke-dasharray: 4 8;
+  animation: home-beam-dash 0.75s linear infinite;
+}
+
+/* ── Cosmic Explosion (BOOM Supernova) Theme & GPU-Composited Utilities ── */
+.boom-cosmos {
+  --background: oklch(0.105 0.026 266);
+  --card: oklch(0.155 0.03 268);
+  --muted: oklch(0.2 0.032 268);
+  --border: oklch(0.62 0.07 265 / 22%);
+  background-color: #05060d;
+  background-image:
+    radial-gradient(
+      ellipse 70% 50% at 74% 16%,
+      rgb(249 115 22 / 14%),
+      rgb(244 63 94 / 7%) 42%,
+      transparent 74%
+    ),
+    radial-gradient(
+      ellipse 60% 48% at 14% 48%,
+      rgb(139 92 246 / 13%),
+      rgb(56 189 248 / 5%) 48%,
+      transparent 74%
+    ),
+    radial-gradient(
+      ellipse 55% 40% at 84% 86%,
+      rgb(245 158 11 / 11%),
+      rgb(217 70 239 / 6%) 46%,
+      transparent 72%
+    );
+}
+
+/* Molten + cosmic plasma perimeter energy beam (pure CSS @property, GPU composited) */
+.boom-flow-border {
+  padding: 1.5px;
+  border-radius: inherit;
+  background: conic-gradient(
+    from var(--auto-group-flow-angle),
+    transparent 0deg 170deg,
+    rgb(56 189 248 / 55%) 215deg,
+    rgb(168 85 247 / 75%) 255deg,
+    rgb(244 63 94) 295deg,
+    rgb(249 115 22) 325deg,
+    rgb(251 191 36) 350deg,
+    transparent 360deg
+  );
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: auto-group-flow-border-travel 2.4s linear infinite;
+}
+
+@keyframes boom-shimmer-sweep {
+  0% {
+    background-position: 220% 50%;
+  }
+  100% {
+    background-position: -20% 50%;
+  }
+}
+
+.boom-text-shimmer {
+  background-image: linear-gradient(
+    110deg,
+    #f8fafc 8%,
+    #fde68a 26%,
+    #fb923c 42%,
+    #f43f5e 56%,
+    #c084fc 70%,
+    #38bdf8 82%,
+    #f8fafc 94%
+  );
+  background-size: 240% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: boom-shimmer-sweep 5s linear infinite;
+}
+
+@keyframes boom-shockwave-pulse {
+  0% {
+    transform: scale(0.35);
+    opacity: 0.72;
+  }
+  100% {
+    transform: scale(2.35);
+    opacity: 0;
+  }
+}
+
+.boom-shockwave-ring {
+  animation: boom-shockwave-pulse 3.6s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  will-change: transform, opacity;
+}
+
+@keyframes boom-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes boom-spin-reverse {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+.boom-spin-slow {
+  animation: boom-spin 16s linear infinite;
+}
+
+.boom-spin-supernova {
+  animation: boom-spin 36s linear infinite;
+  will-change: transform;
+}
+
+.boom-spin-orbit {
+  animation: boom-spin 14s linear infinite;
+  will-change: transform;
+}
+
+.boom-spin-orbit-reverse {
+  animation: boom-spin-reverse 20s linear infinite;
+  will-change: transform;
+}
+
+/* Supernova radial god-rays using a single conic-gradient layer */
+.boom-supernova-rays {
+  background: repeating-conic-gradient(
+    from 0deg,
+    rgb(251 191 36 / 16%) 0deg 4deg,
+    transparent 4deg 20deg,
+    rgb(244 63 94 / 12%) 20deg 23deg,
+    transparent 23deg 36deg,
+    rgb(56 189 248 / 11%) 36deg 39deg,
+    transparent 39deg 60deg
+  );
+  mask-image: radial-gradient(circle, black 8%, transparent 70%);
+  -webkit-mask-image: radial-gradient(circle, black 8%, transparent 70%);
+}
+
+@keyframes boom-star-twinkle {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 0.95;
+  }
+}
+
+.boom-star-layer-a {
+  animation: boom-star-twinkle 4.2s ease-in-out infinite;
+}
+
+.boom-star-layer-b {
+  animation: boom-star-twinkle 5.8s ease-in-out 1.4s infinite;
+}
+
+.boom-star-layer-c {
+  animation: boom-star-twinkle 7.1s ease-in-out 2.8s infinite;
+}
+
+@keyframes boom-meteor-shoot {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(-32deg) scaleX(0.3);
+    opacity: 0;
+  }
+  8% {
+    opacity: 0.95;
+  }
+  26% {
+    transform: translate3d(-420px, 265px, 0) rotate(-32deg) scaleX(1.1);
+    opacity: 0;
+  }
+  100% {
+    transform: translate3d(-420px, 265px, 0) rotate(-32deg) scaleX(1.1);
+    opacity: 0;
+  }
+}
+
+.boom-meteor {
+  width: 140px;
+  height: 1.5px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    90deg,
+    #fff7ed 0%,
+    #fb923c 25%,
+    #f43f5e 55%,
+    transparent 100%
+  );
+  animation: boom-meteor-shoot 6.5s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  will-change: transform, opacity;
+}
+
+.boom-meteor-cyan {
+  background: linear-gradient(
+    90deg,
+    #f0f9ff 0%,
+    #38bdf8 30%,
+    #a855f7 65%,
+    transparent 100%
+  );
+}

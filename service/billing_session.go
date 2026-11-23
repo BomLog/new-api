@@ -25,6 +25,79 @@ import (
 // BillingSession — 统一计费会话
 // ---------------------------------------------------------------------------
 
+const maxTrustedConcurrentPerUser = 8
+
+type trustedUserInFlight struct {
+	quota int
+	count int
+}
+
+var trustedQuotaTracker = struct {
+	mu      sync.Mutex
+	byUser  map[int]*trustedUserInFlight
+	byToken map[int]int
+}{
+	byUser:  make(map[int]*trustedUserInFlight),
+	byToken: make(map[int]int),
+}
+
+func tryAcquireTrustedInFlight(userId, tokenId int, tokenUnlimited bool, userQuota, tokenQuota int, estimatedQuota int, trustQuota float64) (int, bool) {
+	held := max(estimatedQuota, 1)
+	trustedQuotaTracker.mu.Lock()
+	defer trustedQuotaTracker.mu.Unlock()
+
+	userState := trustedQuotaTracker.byUser[userId]
+	currentUserQuota := 0
+	currentUserCount := 0
+	if userState != nil {
+		currentUserQuota = userState.quota
+		currentUserCount = userState.count
+	}
+	if currentUserCount >= maxTrustedConcurrentPerUser {
+		return 0, false
+	}
+	if float64(userQuota-currentUserQuota-held) <= trustQuota {
+		return 0, false
+	}
+	if !tokenUnlimited {
+		currentTokenQuota := trustedQuotaTracker.byToken[tokenId]
+		if float64(tokenQuota-currentTokenQuota-held) <= trustQuota {
+			return 0, false
+		}
+		trustedQuotaTracker.byToken[tokenId] = currentTokenQuota + held
+	}
+	if userState == nil {
+		userState = &trustedUserInFlight{}
+		trustedQuotaTracker.byUser[userId] = userState
+	}
+	userState.quota += held
+	userState.count++
+	return held, true
+}
+
+func releaseTrustedInFlight(userId, tokenId int, tokenUnlimited bool, held int) {
+	if held <= 0 {
+		return
+	}
+	trustedQuotaTracker.mu.Lock()
+	defer trustedQuotaTracker.mu.Unlock()
+
+	if userState := trustedQuotaTracker.byUser[userId]; userState != nil {
+		userState.quota = max(userState.quota-held, 0)
+		userState.count = max(userState.count-1, 0)
+		if userState.count == 0 && userState.quota == 0 {
+			delete(trustedQuotaTracker.byUser, userId)
+		}
+	}
+	if !tokenUnlimited {
+		if next := trustedQuotaTracker.byToken[tokenId] - held; next > 0 {
+			trustedQuotaTracker.byToken[tokenId] = next
+		} else {
+			delete(trustedQuotaTracker.byToken, tokenId)
+		}
+	}
+}
+
 // BillingSession 封装单次请求的预扣费/结算/退款生命周期。
 // 实现 relaycommon.BillingSettler 接口。
 type BillingSession struct {
@@ -34,11 +107,21 @@ type BillingSession struct {
 	tokenConsumed    int    // 令牌额度实际扣减量
 	extraReserved    int    // 发送前补充预扣的额度（订阅退款时需要单独回滚）
 	trusted          bool   // 是否命中信任额度旁路
+	trustHeldQuota   int    // 信任旁路期间占用的在途估算额度
 	fundingSettled   bool   // funding.Settle 已成功，资金来源已提交
 	settled          bool   // Settle 全部完成（资金 + 令牌）
 	refunded         bool   // Refund 已调用
 	lang             string // 请求声明的语言，为空表示未声明
 	mu               sync.Mutex
+}
+
+func (s *BillingSession) releaseTrustHoldLocked() {
+	if s.trustHeldQuota <= 0 || s.relayInfo == nil {
+		return
+	}
+	held := s.trustHeldQuota
+	s.trustHeldQuota = 0
+	releaseTrustedInFlight(s.relayInfo.UserId, s.relayInfo.TokenId, s.relayInfo.TokenUnlimited, held)
 }
 
 // Settle 根据实际消耗额度进行结算。
@@ -50,6 +133,7 @@ func (s *BillingSession) Settle(actualQuota int) error {
 	if s.settled {
 		return nil
 	}
+	defer s.releaseTrustHoldLocked()
 	delta := actualQuota - s.preConsumedQuota
 	if delta == 0 {
 		s.settled = true
@@ -87,6 +171,9 @@ func (s *BillingSession) Settle(actualQuota int) error {
 // Refund 退还所有预扣费，幂等安全，异步执行。
 func (s *BillingSession) Refund(c *gin.Context) {
 	s.mu.Lock()
+	if !s.settled && !s.refunded {
+		s.releaseTrustHoldLocked()
+	}
 	if s.settled || s.refunded || !s.needsRefundLocked() {
 		s.mu.Unlock()
 		return
@@ -194,6 +281,7 @@ func (s *BillingSession) reserve(targetQuota int, requireAvailableQuota bool) er
 	s.extraReserved += delta
 	if requireAvailableQuota {
 		s.trusted = false
+		s.releaseTrustHoldLocked()
 	}
 	s.syncRelayInfo()
 	return nil
@@ -209,8 +297,9 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 	effectiveQuota := quota
 
 	// ---- 信任额度旁路 ----
-	if s.shouldTrust(c) {
+	if held, ok := s.shouldTrust(c, quota); ok {
 		s.trusted = true
+		s.trustHeldQuota = held
 		effectiveQuota = 0
 		logger.LogInfo(c, common.LogText("user %d has enough quota, trusted without pre-consume (funding=%s)", s.relayInfo.UserId, s.funding.Source()))
 	} else if effectiveQuota > 0 {
@@ -220,6 +309,7 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 	// ---- 1) 预扣令牌额度 ----
 	if effectiveQuota > 0 {
 		if err := PreConsumeTokenQuota(s.relayInfo, effectiveQuota); err != nil {
+			s.releaseTrustHoldLocked()
 			return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
 		s.tokenConsumed = effectiveQuota
@@ -227,6 +317,7 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 
 	// ---- 2) 预扣资金来源 ----
 	if err := s.funding.PreConsume(effectiveQuota); err != nil {
+		s.releaseTrustHoldLocked()
 		// 预扣费失败，回滚令牌额度
 		if s.tokenConsumed > 0 && !s.relayInfo.IsPlayground {
 			if rollbackErr := model.IncreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, s.tokenConsumed); rollbackErr != nil {
@@ -325,39 +416,49 @@ func (s *BillingSession) reserveToken(delta int) error {
 	return nil
 }
 
-// shouldTrust 统一信任额度检查，适用于钱包和订阅。
-func (s *BillingSession) shouldTrust(c *gin.Context) bool {
+// shouldTrust 统一信任额度检查，适用于钱包和订阅，并跟踪进程内未预扣在途额度。
+func (s *BillingSession) shouldTrust(c *gin.Context, estimatedQuota int) (int, bool) {
 	// 异步任务（ForcePreConsume=true）必须预扣全额，不允许信任旁路
 	if s.relayInfo.ForcePreConsume {
-		return false
+		return 0, false
 	}
 
 	trustQuota := operation_setting.GetQuotaSetting().TrustQuotaUSD * common.QuotaPerUnit
 	if trustQuota <= 0 || math.IsNaN(trustQuota) || math.IsInf(trustQuota, 0) {
-		return false
+		return 0, false
 	}
 
 	// 检查令牌是否充足
-	tokenTrusted := s.relayInfo.TokenUnlimited
-	if !tokenTrusted {
-		tokenQuota := c.GetInt("token_quota")
-		tokenTrusted = float64(tokenQuota) > trustQuota
-	}
-	if !tokenTrusted {
-		return false
+	tokenQuota := 0
+	if !s.relayInfo.TokenUnlimited {
+		tokenQuota = c.GetInt("token_quota")
+		if float64(tokenQuota) <= trustQuota {
+			return 0, false
+		}
 	}
 
 	switch s.funding.Source() {
 	case BillingSourceWallet:
-		return float64(s.relayInfo.UserQuota) > trustQuota
+		if float64(s.relayInfo.UserQuota) <= trustQuota {
+			return 0, false
+		}
+		return tryAcquireTrustedInFlight(
+			s.relayInfo.UserId,
+			s.relayInfo.TokenId,
+			s.relayInfo.TokenUnlimited,
+			s.relayInfo.UserQuota,
+			tokenQuota,
+			estimatedQuota,
+			trustQuota,
+		)
 	case BillingSourceSubscription:
 		// 订阅不能启用信任旁路。原因：
 		// 1. PreConsumeUserSubscription 要求 amount>0 来创建预扣记录并锁定订阅
 		// 2. SubscriptionFunding.PreConsume 忽略参数，始终用 s.amount 预扣
 		// 3. 若信任旁路将 effectiveQuota 设为 0，会导致 preConsumedQuota 与实际订阅预扣不一致
-		return false
+		return 0, false
 	default:
-		return false
+		return 0, false
 	}
 }
 

@@ -156,8 +156,12 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 	var items []ToolSurchargeItem
 
 	if relayInfo.ResponsesUsageInfo != nil {
+		inferredKey := relayInfo.RequestInferredToolKey()
 		for name, tool := range relayInfo.ResponsesUsageInfo.BuiltInTools {
 			if tool == nil {
+				continue
+			}
+			if relayInfo.IsEmptyResponse() && inferredKey != "" && name == inferredKey {
 				continue
 			}
 			count := tool.CallCount
@@ -168,7 +172,8 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 			items = collectToolSurchargeItem(items, name, count, summary.ModelName)
 		}
 	}
-	if relayInfo.RelayMode != relayconstant.RelayModeResponses &&
+	if !relayInfo.IsEmptyResponse() &&
+		relayInfo.RelayMode != relayconstant.RelayModeResponses &&
 		strings.HasSuffix(summary.ModelName, "search-preview") {
 		items = collectToolSurchargeItem(items, dto.BuildInToolWebSearchPreview, 1, summary.ModelName)
 	}
@@ -246,10 +251,14 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.IsClaudeUsageSemantic = summary.UsageSemantic == "anthropic"
 
 	if usage == nil {
-		usage = &dto.Usage{
-			PromptTokens:     relayInfo.GetEstimatePromptTokens(),
-			CompletionTokens: 0,
-			TotalTokens:      relayInfo.GetEstimatePromptTokens(),
+		if relayInfo.IsEmptyResponse() {
+			usage = &dto.Usage{}
+		} else {
+			usage = &dto.Usage{
+				PromptTokens:     relayInfo.GetEstimatePromptTokens(),
+				CompletionTokens: 0,
+				TotalTokens:      relayInfo.GetEstimatePromptTokens(),
+			}
 		}
 	}
 
@@ -420,7 +429,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if billingUsage == nil && snap != nil && billingexpr.UsesFixedPricingByHash(snap.ExprString, snap.ExprHash) {
 		billingUsage = &dto.Usage{PromptTokens: summary.PromptTokens, CompletionTokens: summary.CompletionTokens, TotalTokens: summary.TotalTokens}
 	}
-	if billingUsage != nil {
+	if billingUsage != nil && !relayInfo.IsEmptyResponse() {
 		var tieredUsedVars map[string]bool
 		if snap := relayInfo.TieredBillingSnapshot; snap != nil {
 			tieredUsedVars = billingexpr.UsedVarsByHash(snap.ExprString, snap.ExprHash)
@@ -436,6 +445,9 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 				summary.AudioInputPrice = 0
 			}
 		}
+	}
+	if relayInfo.IsEmptyResponse() && !summary.hasBillableUsage() {
+		summary.Quota = 0
 	}
 
 	for _, item := range summary.ToolSurchargeItems {

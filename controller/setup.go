@@ -1,14 +1,18 @@
 package controller
 
 import (
-	"time"
+	"errors"
+	"strings"
+	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 )
+
+var setupMu sync.Mutex
 
 type Setup struct {
 	Status       bool   `json:"status"`
@@ -25,6 +29,9 @@ type SetupRequest struct {
 }
 
 func GetSetup(c *gin.Context) {
+	if !constant.Setup && model.DB != nil && model.GetSetup() != nil {
+		constant.Setup = true
+	}
 	setup := Setup{
 		Status: constant.Setup,
 	}
@@ -44,35 +51,37 @@ func GetSetup(c *gin.Context) {
 }
 
 func PostSetup(c *gin.Context) {
-	// Check if setup is already completed
-	if constant.Setup {
+	setupMu.Lock()
+	defer setupMu.Unlock()
+
+	if constant.Setup || (model.DB != nil && model.GetSetup() != nil) {
+		constant.Setup = true
 		common.ApiErrorT(c, "The system is already initialized")
 		return
 	}
 
-	// Check if root user already exists
-	rootExists := model.RootUserExists()
-
 	var req SetupRequest
-	err := c.ShouldBindJSON(&req)
-	if err != nil {
+	if err := c.ShouldBindJSON(&req); err != nil {
 		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
 
-	// If root doesn't exist, validate and create admin account
+	rootExists := model.RootUserExists()
+	var rootUser *model.User
+	username := strings.TrimSpace(req.Username)
 	if !rootExists {
-		// Validate username length: max 12 characters to align with model.User validation
-		if len(req.Username) > 12 {
+		if username == "" || username != req.Username || strings.ContainsAny(username, " \t\r\n") {
+			common.ApiErrorT(c, "Invalid parameters")
+			return
+		}
+		if len(username) > 12 {
 			common.ApiErrorT(c, "Username must be {{max}} characters or fewer", map[string]any{"max": 12})
 			return
 		}
-		// Validate password
 		if req.Password != req.ConfirmPassword {
 			common.ApiErrorT(c, "Passwords do not match")
 			return
 		}
-
 		if err := common.ValidateNewAccountPassword(req.Password); err != nil {
 			c.JSON(200, gin.H{
 				"success": false,
@@ -80,15 +89,14 @@ func PostSetup(c *gin.Context) {
 			})
 			return
 		}
-
-		// Create root user
 		hashedPassword, err := common.HashAccountPassword(req.Password)
 		if err != nil {
-			common.ApiErrorT(c, "System error: {{error}}", map[string]any{"error": err.Error()})
+			logger.LogError(c.Request.Context(), common.LogText("setup password hash failed client_ip=%s error=%q", c.ClientIP(), err.Error()))
+			common.ApiErrorT(c, "Failed to initialize the system")
 			return
 		}
-		rootUser := model.User{
-			Username:    req.Username,
+		rootUser = &model.User{
+			Username:    username,
 			Password:    hashedPassword,
 			Role:        common.RoleRootUser,
 			Status:      common.UserStatusEnabled,
@@ -96,49 +104,21 @@ func PostSetup(c *gin.Context) {
 			AccessToken: nil,
 			Quota:       100000000,
 		}
-		err = model.DB.Create(&rootUser).Error
-		if err != nil {
-			common.ApiErrorT(c, "Failed to create the administrator account: {{error}}", map[string]any{"error": err.Error()})
+	}
+
+	createdRoot, err := model.CompleteInitialSetup(rootUser, req.SelfUseModeEnabled, req.DemoSiteEnabled)
+	if err != nil {
+		if errors.Is(err, model.ErrSystemAlreadyInitialized) {
+			constant.Setup = true
+			logger.LogWarn(c.Request.Context(), common.LogText("setup rejected reason=already_initialized client_ip=%s", c.ClientIP()))
+			common.ApiErrorT(c, "The system is already initialized")
 			return
 		}
-	}
-
-	// Set operation modes
-	operation_setting.SelfUseModeEnabled = req.SelfUseModeEnabled
-	operation_setting.DemoSiteEnabled = req.DemoSiteEnabled
-
-	// Save operation modes to database for persistence
-	err = model.UpdateOption("SelfUseModeEnabled", boolToString(req.SelfUseModeEnabled))
-	if err != nil {
-		common.ApiErrorT(c, "Failed to save the self-use mode setting: {{error}}", map[string]any{"error": err.Error()})
+		logger.LogError(c.Request.Context(), common.LogText("setup transaction failed username=%q client_ip=%s error=%q", username, c.ClientIP(), err.Error()))
+		common.ApiErrorT(c, "Failed to initialize the system")
 		return
 	}
 
-	err = model.UpdateOption("DemoSiteEnabled", boolToString(req.DemoSiteEnabled))
-	if err != nil {
-		common.ApiErrorT(c, "Failed to save the demo site mode setting: {{error}}", map[string]any{"error": err.Error()})
-		return
-	}
-
-	// Update setup status
-	constant.Setup = true
-
-	setup := model.Setup{
-		Version:       common.Version,
-		InitializedAt: time.Now().Unix(),
-	}
-	err = model.DB.Create(&setup).Error
-	if err != nil {
-		common.ApiErrorT(c, "Failed to initialize the system: {{error}}", map[string]any{"error": err.Error()})
-		return
-	}
-
+	logger.LogInfo(c.Request.Context(), common.LogText("system setup completed root_created=%t username=%q self_use=%t demo_site=%t client_ip=%s", createdRoot, username, req.SelfUseModeEnabled, req.DemoSiteEnabled, c.ClientIP()))
 	common.ApiSuccessT(c, "System initialized successfully", nil)
-}
-
-func boolToString(b bool) string {
-	if b {
-		return "true"
-	}
-	return "false"
 }

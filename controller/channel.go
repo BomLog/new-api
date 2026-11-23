@@ -1125,6 +1125,10 @@ func EditTagChannels(c *gin.Context) {
 		common.ApiErrorT(c, "Unauthorized, insufficient privileges")
 		return
 	}
+	if channelTag.HeaderOverride != nil && !callerCanRedirectStoredChannelKey(c) {
+		common.ApiErrorT(c, "Unauthorized, insufficient privileges")
+		return
+	}
 	if channelTag.ParamOverride != nil {
 		trimmed := strings.TrimSpace(*channelTag.ParamOverride)
 		if trimmed != "" && !json.Valid([]byte(trimmed)) {
@@ -1375,6 +1379,12 @@ func UpdateChannel(c *gin.Context) {
 	// An edit that leaves the key as it read it writes no key, so it cannot put
 	// back a credential a refresh replaced meanwhile.
 	keyChanged := requestedKey != "" && requestedKey != originChannel.Key
+	if !keyChanged && strings.TrimSpace(originChannel.Key) != "" &&
+		channelRedirectsStoredCredential(&channel, originChannel, requestData, proxyChanged) &&
+		!callerCanRedirectStoredChannelKey(c) {
+		common.ApiErrorT(c, "Unauthorized, insufficient privileges")
+		return
+	}
 	// A type or setting left out keeps the stored one.
 	keptKey, keptType, keptPluginKey := originChannel.Key, channel.Type, channel.GetSetting().TaskPluginKey
 	if keyChanged {
@@ -1687,6 +1697,67 @@ func applyTaskPluginModelPreview(channel *model.Channel, req fetchModelsRequest)
 	return nil
 }
 
+func callerCanRedirectStoredChannelKey(c *gin.Context) bool {
+	if c == nil || c.GetBool("use_access_token") {
+		return false
+	}
+	if roleVal, exists := c.Get("role"); exists {
+		role, ok := roleVal.(int)
+		return ok && role >= common.RoleRootUser
+	}
+	return true
+}
+
+func channelRedirectsStoredCredential(channel *PatchChannel, origin *model.Channel, requestData map[string]any, proxyChanged bool) bool {
+	if proxyChanged {
+		return true
+	}
+	if _, ok := requestData["type"]; ok && channel.Type != 0 && channel.Type != origin.Type {
+		return true
+	}
+	if _, ok := requestData["base_url"]; ok && !equalStringPtr(channel.BaseURL, origin.BaseURL) {
+		return true
+	}
+	if _, ok := requestData["header_override"]; ok && !equalStringPtr(channel.HeaderOverride, origin.HeaderOverride) {
+		return true
+	}
+	if _, ok := requestData["settings"]; ok && channel.OtherSettings != origin.OtherSettings {
+		return true
+	}
+	return false
+}
+
+func previewRedirectsStoredCredential(req fetchModelsRequest, saved *model.Channel) bool {
+	if saved == nil || strings.TrimSpace(saved.Key) == "" {
+		return false
+	}
+	if req.BaseURL != nil && strings.TrimSpace(*req.BaseURL) != strings.TrimSpace(saved.GetBaseURL()) {
+		return true
+	}
+	savedHeader := ""
+	if saved.HeaderOverride != nil {
+		savedHeader = strings.TrimSpace(*saved.HeaderOverride)
+	}
+	if req.HeaderOverride != nil && strings.TrimSpace(*req.HeaderOverride) != savedHeader {
+		return true
+	}
+	if req.Proxy != nil && strings.TrimSpace(*req.Proxy) != strings.TrimSpace(saved.GetSetting().Proxy) {
+		return true
+	}
+	if req.AdvancedCustom != nil {
+		rawSaved := ""
+		if saved.GetOtherSettings().AdvancedCustom != nil {
+			if encoded, err := common.Marshal(saved.GetOtherSettings().AdvancedCustom); err == nil {
+				rawSaved = string(encoded)
+			}
+		}
+		if strings.TrimSpace(*req.AdvancedCustom) != rawSaved {
+			return true
+		}
+	}
+	return false
+}
+
 func FetchModels(c *gin.Context) {
 	var req fetchModelsRequest
 
@@ -1700,6 +1771,14 @@ func FetchModels(c *gin.Context) {
 
 	var channel *model.Channel
 	if req.Type == constant.ChannelTypeAdvancedCustom || req.ChannelID > 0 {
+		if req.ChannelID > 0 {
+			if savedChannel, lookupErr := model.GetChannelById(req.ChannelID, true); lookupErr == nil &&
+				previewRedirectsStoredCredential(req, savedChannel) &&
+				!callerCanRedirectStoredChannelKey(c) {
+				common.ApiErrorStatus(c, http.StatusForbidden, common.NewMessage("Unauthorized, insufficient privileges"))
+				return
+			}
+		}
 		var err error
 		channel, err = buildAdvancedCustomModelPreviewChannel(req)
 		if err != nil {

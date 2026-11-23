@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import axios from 'axios'
 
 import { api, refreshAuthentication, type RefreshOutcome } from '@/lib/api'
+import { openExternalHttpUrl } from '@/lib/content-format'
 import { AuthOperationError } from '@/lib/secure-verification'
 import {
   getServerErrorMessageKey,
@@ -165,8 +166,11 @@ export async function sendPasswordResetEmail(
 
 // Start GitHub OAuth flow
 export async function githubOAuthStart(clientId: string, state: string) {
-  const url = `https://github.com/login/oauth/authorize?client_id=${clientId}&state=${state}&scope=user:email`
-  window.open(url)
+  const url = new URL('https://github.com/login/oauth/authorize')
+  url.searchParams.set('client_id', clientId)
+  url.searchParams.set('state', state)
+  url.searchParams.set('scope', 'user:email')
+  openExternalHttpUrl(url.toString())
 }
 
 // Get OAuth state for CSRF protection

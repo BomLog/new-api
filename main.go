@@ -238,8 +238,9 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr:    net.JoinHostPort(host, port),
-		Handler: server,
+		Addr:              net.JoinHostPort(host, port),
+		Handler:           server,
+		ReadHeaderTimeout: 15 * time.Second,
 	}
 
 	go func() {

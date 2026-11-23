@@ -24,16 +24,12 @@ import {
   RouterProvider,
 } from '@tanstack/react-router'
 import { render, screen } from '@testing-library/react'
-import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import userEvent from '@testing-library/user-event'
+import { afterEach, expect, test } from 'vitest'
 
 import { STATUS_QUERY_KEY } from '@/lib/status-query'
 
 import { Hero } from '../components/sections/hero'
-
-// jsdom has no 2D canvas; the galaxy backdrop is decorative and skips drawing.
-beforeEach(() => {
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
-})
 
 afterEach(() => {
   window.localStorage.clear()
@@ -48,6 +44,7 @@ async function renderHero(
   })
   client.setQueryData(STATUS_QUERY_KEY, {
     docs_link: 'https://docs.example.com',
+    server_address: 'https://api.example.com',
     ...statusOverrides,
   })
   const router = createRouter({
@@ -94,14 +91,32 @@ test('signed-in users get the dashboard link and the configured docs link', asyn
   ).not.toBeInTheDocument()
 })
 
-test('the galaxy backdrop is hidden from assistive technology', async () => {
+test('hero renders BOOM branding, triggers shockwave badge, and switches quickstart protocol tabs', async () => {
+  const user = userEvent.setup()
   await renderHero(false)
 
   await screen.findByRole('heading', { level: 1 })
-  expect(document.querySelector('canvas')).toHaveAttribute(
-    'aria-hidden',
-    'true'
-  )
+  expect(document.querySelector('canvas')).not.toBeInTheDocument()
+  expect(screen.getAllByText('BOOM').length).toBeGreaterThanOrEqual(2)
+
+  const boomTrigger = screen.getByRole('button', {
+    name: 'Trigger BOOM shockwave',
+  })
+  await user.click(boomTrigger)
+
+  expect(screen.getByText('/v1/chat/completions')).toBeInTheDocument()
+  expect(screen.getByText('gpt-4o')).toBeInTheDocument()
+
+  await user.click(screen.getByRole('tab', { name: 'Claude' }))
+  expect(screen.getByText('/v1/messages')).toBeInTheDocument()
+  expect(await screen.findByText('claude-sonnet-4-5')).toBeInTheDocument()
+
+  await user.click(screen.getByRole('tab', { name: 'Gemini' }))
+  expect(
+    screen.getByText('/v1beta/models/gemini-2.5-pro:generateContent')
+  ).toBeInTheDocument()
+  expect(await screen.findByText('gemini-2.5-pro')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Copy code' })).toBeInTheDocument()
 })
 
 test('renders enabled custom buttons configured for home and hides pricing-only buttons', async () => {

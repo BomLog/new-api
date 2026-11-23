@@ -103,6 +103,41 @@ func (info *RelayInfo) RecordRequestInferredToolCall(key string) {
 	info.requestInferredToolKey = key
 }
 
+func (info *RelayInfo) RequestInferredToolKey() string {
+	if info == nil {
+		return ""
+	}
+	return info.requestInferredToolKey
+}
+
+func (info *RelayInfo) MarkEmptyResponse() {
+	if info != nil {
+		info.EmptyResponse = true
+	}
+}
+
+func (info *RelayInfo) IsEmptyResponse() bool {
+	return info != nil && info.EmptyResponse
+}
+
+// HasResponseBillableToolCalls reports whether the upstream response itself
+// produced any billable tool or image-generation call, excluding request-inferred
+// forced search markers set before the upstream replied.
+func (info *RelayInfo) HasResponseBillableToolCalls() bool {
+	if info == nil || info.ResponsesUsageInfo == nil {
+		return false
+	}
+	for name, tool := range info.ResponsesUsageInfo.BuiltInTools {
+		if name == info.requestInferredToolKey || tool == nil {
+			continue
+		}
+		if tool.CallCount > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (info *RelayInfo) ensureBuiltInTools() {
 	if info.ResponsesUsageInfo == nil {
 		info.ResponsesUsageInfo = &ResponsesUsageInfo{}

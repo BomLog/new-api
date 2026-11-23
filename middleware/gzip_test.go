@@ -167,3 +167,25 @@ func TestDecompressRequestZstdEarlyRejectionDoesNotReadBody(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, response.Code)
 	assert.Zero(t, body.reads.Load(), "an early rejection must not consume the request body")
 }
+
+func TestDecompressRequestCapsCompressedWireSize(t *testing.T) {
+	previousMaxBodyMB := constant.MaxRequestBodyMB
+	constant.MaxRequestBodyMB = 1
+	t.Cleanup(func() {
+		constant.MaxRequestBodyMB = previousMaxBodyMB
+	})
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	var readErr error
+	router.POST("/api/test", DecompressRequestMiddleware(), func(c *gin.Context) {
+		_, readErr = io.ReadAll(c.Request.Body)
+	})
+
+	// Brotli stream whose compressed wire representation itself exceeds 1 MiB.
+	oversizedWire := bytes.Repeat([]byte{0x06}, (1<<20)+4096)
+	req := httptest.NewRequest(http.MethodPost, "/api/test", bytes.NewReader(oversizedWire))
+	req.Header.Set("Content-Encoding", "br")
+	router.ServeHTTP(httptest.NewRecorder(), req)
+	require.Error(t, readErr)
+}

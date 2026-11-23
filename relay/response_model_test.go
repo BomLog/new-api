@@ -1,6 +1,8 @@
 package relay
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +12,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
@@ -18,9 +22,13 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestResponseModelComparisonAndLog(t *testing.T) {
@@ -262,4 +270,355 @@ func TestResponseModelDoesNotRecordSynthesizedModel(t *testing.T) {
 	})
 	require.Nil(t, apiErr)
 	assert.Nil(t, info.ResponseModel)
+}
+
+type errAfterReader struct {
+	prefix string
+	offset int
+	err    error
+}
+
+func (r *errAfterReader) Read(p []byte) (int, error) {
+	if r.offset < len(r.prefix) {
+		n := copy(p, r.prefix[r.offset:])
+		r.offset += n
+		return n, nil
+	}
+	return 0, r.err
+}
+
+func (r *errAfterReader) Close() error {
+	return nil
+}
+
+func TestEmptyResponseAndUpstreamStreamErrorWaiveBillingAndRefundReservation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = previousTimeout })
+
+	previousQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 500 * 1000
+	t.Cleanup(func() { common.QuotaPerUnit = previousQuotaPerUnit })
+
+	previousRedis := common.RedisEnabled
+	previousMemoryCache := common.MemoryCacheEnabled
+	common.RedisEnabled = false
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() {
+		common.RedisEnabled = previousRedis
+		common.MemoryCacheEnabled = previousMemoryCache
+	})
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+
+	oldDB, oldLogDB := model.DB, model.LOG_DB
+	oldMainType, oldLogType := common.MainDatabaseType(), common.LogDatabaseType()
+	model.DB, model.LOG_DB = db, db
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = oldDB, oldLogDB
+		common.SetDatabaseTypes(oldMainType, oldLogType)
+	})
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Log{}))
+
+	operation_setting.SetToolPriceForTest(dto.BuildInToolWebSearchPreview, 10)
+	t.Cleanup(func() { operation_setting.DeleteToolPriceForTest(dto.BuildInToolWebSearchPreview) })
+
+	const startingQuota = 1_000_000
+	http2InternalErr := errors.New("stream error: stream ID 1; INTERNAL_ERROR; received from peer")
+
+	for index, tc := range []struct {
+		name               string
+		expression         string
+		estimate           int
+		format             types.RelayFormat
+		mode               int
+		stream             bool
+		inferredSearchTool bool
+		newBody            func() io.ReadCloser
+		handler            func(*gin.Context, *relaycommon.RelayInfo, *http.Response) (*dto.Usage, *types.NewAPIError)
+		wantQuota          int
+		wantStreamStatus   string
+		wantEndReason      string
+	}{
+		{
+			name:       "claude stream HTTP/2 INTERNAL_ERROR before message_start waives estimated billing and refunds",
+			expression: `tier("base", p * 3 + c * 15)`,
+			estimate:   1000,
+			format:     types.RelayFormatClaude,
+			mode:       relayconstant.RelayModeUnknown,
+			stream:     true,
+			newBody: func() io.ReadCloser {
+				return &errAfterReader{err: http2InternalErr}
+			},
+			handler: func(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+				return claude.ClaudeStreamHandler(c, resp, info)
+			},
+			wantQuota:        0,
+			wantStreamStatus: "error",
+			wantEndReason:    "scanner_error",
+		},
+		{
+			name:       "claude stream HTTP/2 INTERNAL_ERROR after message_start without output waives billing and refunds",
+			expression: `tier("base", p * 3 + cc * 4 + c * 15)`,
+			estimate:   1000,
+			format:     types.RelayFormatClaude,
+			mode:       relayconstant.RelayModeUnknown,
+			stream:     true,
+			newBody: func() io.ReadCloser {
+				return &errAfterReader{
+					prefix: "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"model\":\"claude-sonnet-4-5\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":120,\"cache_creation_input_tokens\":80,\"output_tokens\":0}}}\n\n",
+					err:    http2InternalErr,
+				}
+			},
+			handler: func(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+				return claude.ClaudeStreamHandler(c, resp, info)
+			},
+			wantQuota:        0,
+			wantStreamStatus: "error",
+			wantEndReason:    "scanner_error",
+		},
+		{
+			name:       "claude stream completed refusal with upstream cache tokens still bills upstream usage",
+			expression: `tier("base", p * 3 + cc * 4 + c * 15)`,
+			estimate:   1000,
+			format:     types.RelayFormatClaude,
+			mode:       relayconstant.RelayModeUnknown,
+			stream:     true,
+			newBody: func() io.ReadCloser {
+				return io.NopCloser(strings.NewReader(
+					"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_refusal\",\"type\":\"message\",\"model\":\"claude-sonnet-4-5\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":0,\"cache_creation_input_tokens\":1000,\"output_tokens\":0}}}\n\n" +
+						"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"refusal\"},\"usage\":{\"output_tokens\":0}}\n\n" +
+						"data: {\"type\":\"message_stop\"}\n\n",
+				))
+			},
+			handler: func(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+				return claude.ClaudeStreamHandler(c, resp, info)
+			},
+			wantQuota:        2000,
+			wantStreamStatus: "ok",
+			wantEndReason:    "eof",
+		},
+		{
+			name:               "claude non-stream empty response without upstream usage waives fixed price and inferred search surcharge",
+			expression:         `tier("request", fixed(0.01))`,
+			estimate:           1000,
+			format:             types.RelayFormatClaude,
+			mode:               relayconstant.RelayModeUnknown,
+			stream:             false,
+			inferredSearchTool: true,
+			newBody: func() io.ReadCloser {
+				return io.NopCloser(strings.NewReader(`{"id":"msg_empty","type":"message","model":"claude-sonnet-4-5","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":0,"output_tokens":0}}`))
+			},
+			handler: func(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+				return claude.ClaudeHandler(c, resp, info)
+			},
+			wantQuota: 0,
+		},
+		{
+			name:       "openai chat stream HTTP/2 INTERNAL_ERROR without output waives estimated billing and refunds",
+			expression: `tier("base", p * 2 + c * 8)`,
+			estimate:   1000,
+			format:     types.RelayFormatOpenAI,
+			mode:       relayconstant.RelayModeChatCompletions,
+			stream:     true,
+			newBody: func() io.ReadCloser {
+				return &errAfterReader{
+					prefix: "data: {\"id\":\"chat_1\",\"model\":\"gpt-5\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n",
+					err:    http2InternalErr,
+				}
+			},
+			handler:          openai.OaiStreamHandler,
+			wantQuota:        0,
+			wantStreamStatus: "error",
+			wantEndReason:    "scanner_error",
+		},
+		{
+			name:       "openai chat non-stream empty message without upstream usage waives billing and refunds",
+			expression: `tier("base", p * 2 + c * 8)`,
+			estimate:   1000,
+			format:     types.RelayFormatOpenAI,
+			mode:       relayconstant.RelayModeChatCompletions,
+			stream:     false,
+			newBody: func() io.ReadCloser {
+				return io.NopCloser(strings.NewReader(`{"id":"chat_empty","model":"gpt-5","choices":[{"index":0,"message":{"role":"assistant","content":""},"finish_reason":"stop"}]}`))
+			},
+			handler:   openai.OpenaiHandler,
+			wantQuota: 0,
+		},
+		{
+			name:       "openai chat non-stream empty message with explicit upstream usage bills upstream tokens",
+			expression: `tier("base", p * 2 + c * 8)`,
+			estimate:   500,
+			format:     types.RelayFormatOpenAI,
+			mode:       relayconstant.RelayModeChatCompletions,
+			stream:     false,
+			newBody: func() io.ReadCloser {
+				return io.NopCloser(strings.NewReader(`{"id":"chat_billed","model":"gpt-5","choices":[{"index":0,"message":{"role":"assistant","content":""},"finish_reason":"stop"}],"usage":{"prompt_tokens":1000,"completion_tokens":0,"total_tokens":1000}}`))
+			},
+			handler:   openai.OpenaiHandler,
+			wantQuota: 1000,
+		},
+		{
+			name:       "openai responses stream HTTP/2 INTERNAL_ERROR after response.created waives estimated billing and refunds",
+			expression: `tier("base", p * 2 + c * 8)`,
+			estimate:   1000,
+			format:     types.RelayFormatOpenAIResponses,
+			mode:       relayconstant.RelayModeResponses,
+			stream:     true,
+			newBody: func() io.ReadCloser {
+				return &errAfterReader{
+					prefix: "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-5\"}}\n\n",
+					err:    http2InternalErr,
+				}
+			},
+			handler:          openai.OaiResponsesStreamHandler,
+			wantQuota:        0,
+			wantStreamStatus: "error",
+			wantEndReason:    "scanner_error",
+		},
+		{
+			name:       "gemini stream empty candidate frame followed by HTTP/2 INTERNAL_ERROR waives estimated billing",
+			expression: `tier("base", p * 2 + c * 8)`,
+			estimate:   1000,
+			format:     types.RelayFormatGemini,
+			mode:       relayconstant.RelayModeGemini,
+			stream:     true,
+			newBody: func() io.ReadCloser {
+				return &errAfterReader{
+					prefix: "data: {\"modelVersion\":\"gemini-2.5-pro\",\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[]}}]}\n\n",
+					err:    http2InternalErr,
+				}
+			},
+			handler:          gemini.GeminiTextGenerationStreamHandler,
+			wantQuota:        0,
+			wantStreamStatus: "error",
+			wantEndReason:    "scanner_error",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			user := model.User{
+				Username: fmt.Sprintf("empty_resp_user_%d", index),
+				AffCode:  fmt.Sprintf("empty_aff_%d", index),
+				Quota:    startingQuota,
+				Status:   common.UserStatusEnabled,
+			}
+			require.NoError(t, db.Create(&user).Error)
+			token := model.Token{
+				UserId:      user.Id,
+				Key:         fmt.Sprintf("empty-resp-token-%d", index),
+				Name:        "empty-resp",
+				RemainQuota: startingQuota,
+				Status:      common.TokenStatusEnabled,
+			}
+			require.NoError(t, db.Create(&token).Error)
+			channel := model.Channel{
+				Name:   fmt.Sprintf("empty-resp-chan-%d", index),
+				Key:    "unused",
+				Status: common.ChannelStatusEnabled,
+			}
+			require.NoError(t, db.Create(&channel).Error)
+
+			request := &billingexpr.RequestInput{Body: []byte(`{}`)}
+			cost, trace, err := billingexpr.RunExprWithRequest(
+				tc.expression,
+				billingexpr.TokenParams{P: float64(tc.estimate), Len: float64(tc.estimate)},
+				*request,
+			)
+			require.NoError(t, err)
+			reservation, err := billingexpr.QuotaRoundStrict(cost / 1_000_000 * common.QuotaPerUnit)
+			require.NoError(t, err)
+			require.Greater(t, reservation, 0)
+
+			snapshot := &billingexpr.BillingSnapshot{
+				BillingMode:              "tiered_expr",
+				ExprString:               tc.expression,
+				ExprHash:                 billingexpr.ExprHashString(tc.expression),
+				QuotaPerUnit:             common.QuotaPerUnit,
+				GroupRatio:               1,
+				EstimatedTier:            trace.MatchedTier,
+				EstimatedBillingUnit:     trace.BillingUnit,
+				EstimatedFixedPrice:      trace.FixedPrice,
+				EstimatedQuotaAfterGroup: reservation,
+			}
+			info := &relaycommon.RelayInfo{
+				UserId:                user.Id,
+				TokenId:               token.Id,
+				TokenKey:              token.Key,
+				OriginModelName:       "test-model",
+				UsingGroup:            "default",
+				UserGroup:             "default",
+				UserSetting:           dto.UserSetting{BillingPreference: "wallet_only"},
+				ForcePreConsume:       true,
+				StartTime:             time.Now(),
+				IsStream:              tc.stream,
+				DisablePing:           true,
+				RelayFormat:           tc.format,
+				RelayMode:             tc.mode,
+				ChannelMeta:           &relaycommon.ChannelMeta{ChannelId: channel.Id, UpstreamModelName: "test-model"},
+				ThinkingContentInfo:   relaycommon.ThinkingContentInfo{IsFirstThinkingContent: true},
+				PriceData:             hosttypes.PriceData{ModelRatio: 1, CompletionRatio: 1, GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1}},
+				TieredBillingSnapshot: snapshot,
+				BillingRequestInput:   request,
+			}
+			info.SetEstimatePromptTokens(tc.estimate)
+			if tc.inferredSearchTool {
+				info.RecordRequestInferredToolCall(dto.BuildInToolWebSearchPreview)
+			}
+
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			c.Set("use_channel", []string{fmt.Sprintf("%d", channel.Id)})
+
+			apiErr := service.PreConsumeBilling(c, reservation, info)
+			require.Nil(t, apiErr)
+
+			heldQuota, err := model.GetUserQuota(user.Id, true)
+			require.NoError(t, err)
+			assert.Equal(t, startingQuota-reservation, heldQuota)
+
+			usage, handlerErr := tc.handler(c, info, &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       tc.newBody(),
+			})
+			require.Nil(t, handlerErr)
+
+			service.PostTextConsumeQuota(c, info, usage, nil)
+
+			var settledUser model.User
+			require.NoError(t, db.First(&settledUser, user.Id).Error)
+			var settledToken model.Token
+			require.NoError(t, db.First(&settledToken, token.Id).Error)
+			assert.Equal(t, startingQuota-tc.wantQuota, settledUser.Quota)
+			assert.Equal(t, startingQuota-tc.wantQuota, settledToken.RemainQuota)
+			assert.Equal(t, tc.wantQuota, settledUser.UsedQuota)
+			assert.Equal(t, tc.wantQuota, settledToken.UsedQuota)
+
+			var logEntry model.Log
+			require.NoError(t, db.Where("user_id = ?", user.Id).Take(&logEntry).Error)
+			assert.Equal(t, tc.wantQuota, logEntry.Quota)
+			assert.NotContains(t, logEntry.Other, "billing-usage-anthropic-estimated")
+			assert.NotContains(t, logEntry.Other, "billing-usage-gemini-estimated")
+			if tc.wantQuota == 0 {
+				assert.Contains(t, logEntry.Content, "Upstream returned no usage, so nothing was charged")
+			} else {
+				assert.NotContains(t, logEntry.Content, "nothing was charged")
+			}
+			if tc.wantStreamStatus != "" {
+				var other map[string]any
+				require.NoError(t, common.UnmarshalJsonStr(logEntry.Other, &other))
+				streamStatus, ok := other["stream_status"].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, tc.wantStreamStatus, streamStatus["status"])
+				assert.Equal(t, tc.wantEndReason, streamStatus["end_reason"])
+			}
+		})
+	}
 }

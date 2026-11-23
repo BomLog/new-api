@@ -182,16 +182,34 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		}
 	}
 
-	if !containStreamUsage {
-		usage = service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-		usage.CompletionTokens += toolCount * 7
-	}
-
-	applyUsagePostProcessing(info, usage, common.StringToByteSlice(usageFrame))
-
 	for _, name := range streamFunctionCallNames {
 		info.CountBillableToolCall(dto.BuildInCallFunctionCall, name)
 	}
+
+	hasStreamOutput := responseTextBuilder.Len() > 0 ||
+		toolCount > 0 ||
+		len(streamFunctionCallNames) > 0 ||
+		(info != nil && (info.HasStreamOutput || info.HasResponseBillableToolCalls())) ||
+		usage.CompletionTokens > 0 ||
+		usage.CompletionTokenDetails.AudioTokens > 0 ||
+		usage.CompletionTokenDetails.ImageTokens > 0
+	upstreamStreamFailed := info != nil && info.StreamStatus != nil && info.StreamStatus.UpstreamFailed()
+
+	if !hasStreamOutput && upstreamStreamFailed {
+		usage = &dto.Usage{}
+		info.MarkEmptyResponse()
+	} else if !containStreamUsage {
+		if hasStreamOutput {
+			usage = service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+			usage.CompletionTokens += toolCount * 7
+			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		} else {
+			usage = &dto.Usage{}
+			info.MarkEmptyResponse()
+		}
+	}
+
+	applyUsagePostProcessing(info, usage, common.StringToByteSlice(usageFrame))
 
 	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
 
@@ -204,6 +222,21 @@ func observeStreamChoices(info *relaycommon.RelayInfo, data string, seen map[str
 	var streamResponse dto.ChatCompletionsStreamResponse
 	if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 		return
+	}
+	if len(streamResponse.Choices) == 0 && info != nil && info.StreamStatus != nil {
+		var errResp dto.OpenAITextResponse
+		if common.UnmarshalJsonStr(data, &errResp) == nil {
+			if oaiErr := errResp.GetOpenAIError(); oaiErr != nil && (oaiErr.Type != "" || oaiErr.Message != "") {
+				code := ""
+				if oaiErr.Code != nil {
+					code = fmt.Sprint(oaiErr.Code)
+				}
+				info.StreamStatus.MarkFailed(code, oaiErr.Type, 0)
+			}
+		}
+	}
+	if strings.Contains(data, `"audio"`) && info != nil && len(ojson.Get(data, "choices.#.delta.audio").Array()) > 0 {
+		info.HasStreamOutput = true
 	}
 	for _, choice := range streamResponse.Choices {
 		if choice.FinishReason != nil && *choice.FinishReason != "" {
@@ -248,6 +281,43 @@ func observeStreamChoices(info *relaycommon.RelayInfo, data string, seen map[str
 			*names = append(*names, name)
 		}
 	}
+}
+
+func hasPositiveUsageCost(cost any) bool {
+	switch v := cost.(type) {
+	case float64:
+		return v > 0
+	case int:
+		return v > 0
+	case int64:
+		return v > 0
+	}
+	return false
+}
+
+func openaiChoicesHaveOutput(choices []dto.OpenAITextResponseChoice, responseBody []byte) bool {
+	for i := range choices {
+		msg := &choices[i].Message
+		if msg.StringContent() != "" || msg.GetReasoningContent() != "" || len(msg.ParseToolCalls()) > 0 {
+			return true
+		}
+		for _, part := range msg.ParseContent() {
+			if part.Type != dto.ContentTypeText || part.Text != "" {
+				return true
+			}
+		}
+	}
+	if len(responseBody) > 0 {
+		if len(ojson.GetBytes(responseBody, "choices.#.message.audio").Array()) > 0 {
+			return true
+		}
+		for _, refusal := range ojson.GetBytes(responseBody, "choices.#.message.refusal").Array() {
+			if refusal.String() != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -306,6 +376,8 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	}
 
 	usageModified := false
+	hasUpstreamUsage := dto.HasOpenAIUsageTokens(&simpleResponse.Usage) || hasPositiveUsageCost(simpleResponse.Usage.Cost)
+	hasChoiceOutput := openaiChoicesHaveOutput(simpleResponse.Choices, responseBody) || info.HasResponseBillableToolCalls()
 	if simpleResponse.Usage.PromptTokens == 0 {
 		completionTokens := simpleResponse.Usage.CompletionTokens
 		if completionTokens == 0 {
@@ -314,13 +386,17 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 				completionTokens += ctkm
 			}
 		}
-		fallbackUsage := &dto.Usage{
-			PromptTokens:     info.GetEstimatePromptTokens(),
-			CompletionTokens: completionTokens,
-			TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
+		if completionTokens > 0 || hasChoiceOutput || hasUpstreamUsage {
+			fallbackUsage := &dto.Usage{
+				PromptTokens:     info.GetEstimatePromptTokens(),
+				CompletionTokens: completionTokens,
+				TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
+			}
+			simpleResponse.Usage = *fallbackUsage
+			usageModified = true
+		} else {
+			info.MarkEmptyResponse()
 		}
-		simpleResponse.Usage = *fallbackUsage
-		usageModified = true
 	}
 
 	applyUsagePostProcessing(info, &simpleResponse.Usage, responseBody)

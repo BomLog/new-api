@@ -48,8 +48,13 @@ func (*StripeAdaptor) RequestAmount(c *gin.Context, req *StripePayRequest) {
 		paymentError(c, common.NewMessage("Top-up amount cannot be less than {{min}}", map[string]any{"min": getStripeMinTopup()}))
 		return
 	}
-	if req.Amount > 10000 {
-		paymentError(c, common.NewMessage("Top-up amount cannot exceed {{max}}", map[string]any{"max": 10000}))
+	maxTopup := getStripeMaxTopup()
+	if maxTopup <= 0 || req.Amount > maxTopup {
+		paymentError(c, common.NewMessage("Top-up amount cannot exceed {{max}}", map[string]any{"max": maxTopup}))
+		return
+	}
+	if normalizeStripeTopUpUnits(req.Amount) <= 0 {
+		paymentError(c, common.NewMessage("Invalid top-up amount"))
 		return
 	}
 	id := c.GetInt("id")
@@ -78,8 +83,14 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 		common.ApiErrorStatus(c, http.StatusOK, common.NewMessage("Top-up amount cannot be less than {{min}}", map[string]any{"min": getStripeMinTopup()}), gin.H{"data": 10})
 		return
 	}
-	if req.Amount > 10000 {
-		common.ApiErrorStatus(c, http.StatusOK, common.NewMessage("Top-up amount cannot exceed {{max}}", map[string]any{"max": 10000}), gin.H{"data": 10})
+	maxTopup := getStripeMaxTopup()
+	if maxTopup <= 0 || req.Amount > maxTopup {
+		common.ApiErrorStatus(c, http.StatusOK, common.NewMessage("Top-up amount cannot exceed {{max}}", map[string]any{"max": maxTopup}), gin.H{"data": 10})
+		return
+	}
+	units := normalizeStripeTopUpUnits(req.Amount)
+	if units <= 0 {
+		paymentError(c, common.NewMessage("Invalid top-up amount"))
 		return
 	}
 
@@ -99,7 +110,7 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 		paymentError(c, common.NewMessage("User does not exist"))
 		return
 	}
-	chargedMoney := GetChargedAmount(float64(req.Amount), *user)
+	chargedMoney := GetChargedAmount(float64(units), *user)
 	if rejectInvalidCreditedQuota(c, id,
 		decimal.NewFromFloat(chargedMoney).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
 	) {
@@ -109,16 +120,16 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 	reference := fmt.Sprintf("new-api-ref-%d-%d-%s", user.Id, time.Now().UnixMilli(), randstr.String(4))
 	referenceId := "ref_" + common.Sha1([]byte(reference))
 
-	payLink, err := genStripeLink(referenceId, user.StripeCustomer, user.Email, req.Amount, req.SuccessURL, req.CancelURL)
+	payLink, err := genStripeLink(referenceId, user.StripeCustomer, user.Email, units, req.SuccessURL, req.CancelURL)
 	if err != nil {
-		logger.LogError(c.Request.Context(), common.LogText("Stripe failed to create Checkout Session user_id=%d trade_no=%s amount=%d error=%q", id, referenceId, req.Amount, err.Error()))
+		logger.LogError(c.Request.Context(), common.LogText("Stripe failed to create Checkout Session user_id=%d trade_no=%s amount=%d error=%q", id, referenceId, units, err.Error()))
 		paymentError(c, common.NewMessage("Failed to start payment"))
 		return
 	}
 
 	topUp := &model.TopUp{
 		UserId:          id,
-		Amount:          req.Amount,
+		Amount:          units,
 		Money:           chargedMoney,
 		TradeNo:         referenceId,
 		PaymentMethod:   model.PaymentMethodStripe,
@@ -128,11 +139,11 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 	}
 	err = topUp.Insert()
 	if err != nil {
-		logger.LogError(c.Request.Context(), common.LogText("Stripe failed to create top-up order user_id=%d trade_no=%s amount=%d error=%q", id, referenceId, req.Amount, err.Error()))
+		logger.LogError(c.Request.Context(), common.LogText("Stripe failed to create top-up order user_id=%d trade_no=%s amount=%d error=%q", id, referenceId, units, err.Error()))
 		paymentError(c, common.NewMessage("Failed to create order"))
 		return
 	}
-	logger.LogInfo(c.Request.Context(), common.LogText("Stripe top-up order created user_id=%d trade_no=%s amount=%d money=%.2f", id, referenceId, req.Amount, chargedMoney))
+	logger.LogInfo(c.Request.Context(), common.LogText("Stripe top-up order created user_id=%d trade_no=%s amount=%d money=%.2f", id, referenceId, units, chargedMoney))
 	c.JSON(http.StatusOK, gin.H{
 		"message": "success",
 		"data": gin.H{
@@ -229,6 +240,11 @@ func sessionCompleted(ctx context.Context, event stripe.Event, callerIp string) 
 func sessionAsyncPaymentSucceeded(ctx context.Context, event stripe.Event, callerIp string) {
 	customerId := event.GetObjectValue("customer")
 	referenceId := event.GetObjectValue("client_reference_id")
+	paymentStatus := event.GetObjectValue("payment_status")
+	if paymentStatus != "" && paymentStatus != "paid" {
+		logger.LogWarn(ctx, common.LogText("Stripe async payment succeeded has unexpected payment_status, ignored trade_no=%s payment_status=%s client_ip=%s", referenceId, paymentStatus, callerIp))
+		return
+	}
 	logger.LogInfo(ctx, common.LogText("Stripe async payment succeeded trade_no=%s client_ip=%s", referenceId, callerIp))
 
 	fulfillOrder(ctx, event, referenceId, customerId, callerIp)
@@ -411,41 +427,61 @@ func GetChargedAmount(count float64, user model.User) float64 {
 	return count * topUpGroupRatio
 }
 
+func normalizeStripeTopUpUnits(amount int64) int64 {
+	if operation_setting.GetQuotaDisplayType() != operation_setting.QuotaDisplayTypeTokens {
+		return amount
+	}
+	if common.QuotaPerUnit <= 0 {
+		return 0
+	}
+	return decimal.NewFromInt(amount).
+		Div(decimal.NewFromFloat(common.QuotaPerUnit)).
+		IntPart()
+}
+
+func getStripeMaxTopup() int64 {
+	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
+		if common.QuotaPerUnit <= 0 {
+			return 0
+		}
+		return decimal.NewFromInt(10000).
+			Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
+			IntPart()
+	}
+	return 10000
+}
+
 func getStripeCreditedQuota(amount int64, group string) decimal.Decimal {
+	units := normalizeStripeTopUpUnits(amount)
+	if units <= 0 {
+		return decimal.Zero
+	}
 	topUpGroupRatio := common.GetTopupGroupRatio(group)
 	if topUpGroupRatio == 0 {
 		topUpGroupRatio = 1
 	}
-	return decimal.NewFromInt(amount).
+	return decimal.NewFromInt(units).
 		Mul(decimal.NewFromFloat(topUpGroupRatio)).
 		Mul(decimal.NewFromFloat(common.QuotaPerUnit))
 }
 
-func getStripePayMoney(amount float64, group string) float64 {
-	originalAmount := amount
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		amount = amount / common.QuotaPerUnit
+func getStripePayMoney(amount float64, _ string) float64 {
+	units := normalizeStripeTopUpUnits(int64(amount))
+	if units <= 0 {
+		return 0
 	}
-	// Using float64 for monetary calculations is acceptable here due to the small amounts involved
-	topupGroupRatio := common.GetTopupGroupRatio(group)
-	if topupGroupRatio == 0 {
-		topupGroupRatio = 1
-	}
-	// apply optional preset discount by the original request amount (if configured), default 1.0
-	discount := 1.0
-	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(originalAmount)]; ok {
-		if ds > 0 {
-			discount = ds
-		}
-	}
-	payMoney := amount * setting.StripeUnitPrice * topupGroupRatio * discount
-	return payMoney
+	return float64(units) * setting.StripeUnitPrice
 }
 
 func getStripeMinTopup() int64 {
-	minTopup := setting.StripeMinTopUp
+	minTopup := int64(setting.StripeMinTopUp)
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		minTopup = minTopup * int(common.QuotaPerUnit)
+		if common.QuotaPerUnit <= 0 {
+			return common.MaxWalletQuota
+		}
+		return decimal.NewFromInt(minTopup).
+			Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
+			IntPart()
 	}
-	return int64(minTopup)
+	return minTopup
 }

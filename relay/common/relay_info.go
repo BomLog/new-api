@@ -132,6 +132,8 @@ type RelayInfo struct {
 	ClaudeToChatStreamState any
 	ChatToGeminiStreamState any
 	ReceivedResponseCount   int
+	HasStreamOutput         bool
+	EmptyResponse           bool
 	FinalPreConsumedQuota   int // 最终预消耗的配额
 	// ForcePreConsume 为 true 时禁用 BillingSession 的信任额度旁路，
 	// 强制预扣全额。用于异步任务（视频/音乐生成等），因为请求返回后任务仍在运行，
@@ -286,6 +288,9 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	// Per-attempt only. Do not clear StreamStatus, conversion diagnostics,
 	// LastError, or billing accumulators — those are request-scoped.
 	info.SendResponseCount = 0
+	info.ReceivedResponseCount = 0
+	info.HasStreamOutput = false
+	info.EmptyResponse = false
 	info.ClaudeToChatStreamState = nil
 	info.ChatToGeminiStreamState = nil
 	info.RequestPluginHeaders = nil

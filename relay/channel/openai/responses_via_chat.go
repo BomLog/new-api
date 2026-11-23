@@ -48,10 +48,17 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return nil, types.NewOpenAIError(fmt.Errorf("expected OpenAI responses response, got %T", convertResult.Value), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	usage := convertResult.Usage
-	if usage == nil || usage.TotalTokens == 0 {
+	if usage == nil || (!dto.HasOpenAIUsageTokens(usage) && !hasPositiveUsageCost(usage.Cost)) {
 		text := service.ExtractOutputTextFromResponses(responsesResp)
-		usage = service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
-		responsesResp.Usage = relayconvert.UsageFromChatUsage(usage)
+		if text != "" || responsesResponseHasOutput(responsesResp) || openaiChoicesHaveOutput(chatResp.Choices, body) || info.HasResponseBillableToolCalls() {
+			usage = service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
+			responsesResp.Usage = relayconvert.UsageFromChatUsage(usage)
+		} else {
+			if usage == nil {
+				usage = &dto.Usage{}
+			}
+			info.MarkEmptyResponse()
+		}
 	}
 
 	responseBody, err := common.Marshal(responsesResp)
@@ -186,15 +193,24 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	}
 
 	usage := state.Usage()
-	noUpstreamUsage := usage == nil || usage.TotalTokens == 0
+	noUpstreamUsage := usage == nil || (!dto.HasOpenAIUsageTokens(usage) && !hasPositiveUsageCost(usage.Cost))
 	if upstreamFailure != nil && noUpstreamUsage && state.UsageText() == "" {
 		// The stream failed before any output reached the client, which
 		// already received response.failed: the request is not charged.
 		return nil, upstreamFailure
 	}
-	if noUpstreamUsage {
-		usage = service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-		state.SetUsage(usage)
+	upstreamStreamFailed := info != nil && info.StreamStatus != nil && info.StreamStatus.UpstreamFailed()
+	if state.UsageText() == "" && !info.HasResponseBillableToolCalls() && upstreamStreamFailed {
+		usage = &dto.Usage{}
+		info.MarkEmptyResponse()
+	} else if noUpstreamUsage {
+		if state.UsageText() != "" || info.HasResponseBillableToolCalls() {
+			usage = service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+			state.SetUsage(usage)
+		} else {
+			usage = &dto.Usage{}
+			info.MarkEmptyResponse()
+		}
 	}
 	if info.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone {
 		return usage, nil

@@ -133,12 +133,25 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 		},
 		ModelName:  modelName,
 		UsePrice:   relayInfo.UsePrice,
+		ModelPrice: relayInfo.PriceData.ModelPrice,
 		ModelRatio: modelRatio,
 		GroupRatio: actualGroupRatio,
 	}
 
 	quota, clamp := calculateAudioQuota(quotaInfo)
 	noteQuotaClamp(relayInfo, clamp)
+	if quota <= 0 {
+		return 0, nil
+	}
+
+	if relayInfo.Billing != nil {
+		target := relayInfo.Billing.GetPreConsumedQuota() + quota
+		if err := relayInfo.Billing.ReserveBeforeSubmit(target); err != nil {
+			return 0, err
+		}
+		logger.LogInfo(ctx, common.LogText("realtime streaming consume quota success, quota: %d", quota))
+		return quota, nil
+	}
 
 	if userQuota < quota {
 		return 0, fmt.Errorf("user quota is not enough, user quota: %s, need quota: %s", logger.FormatQuota(userQuota), logger.FormatQuota(quota))
@@ -168,6 +181,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	if tieredOk {
 		tieredResult = tieredRes
 	}
+	fixedPriceBilling := tieredOk && isFixedPriceSettlement(relayInfo, tieredRes)
 
 	useTimeSeconds := time.Now().Unix() - relayInfo.StartTime.Unix()
 	textInputTokens := usage.InputTokenDetails.TextTokens
@@ -197,6 +211,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		},
 		ModelName:  modelName,
 		UsePrice:   usePrice,
+		ModelPrice: modelPrice,
 		ModelRatio: modelRatio,
 		GroupRatio: groupRatio,
 	}
@@ -225,7 +240,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	}
 
 	// record all the consume log even if quota is 0
-	if totalTokens == 0 {
+	if (relayInfo.IsEmptyResponse() && totalTokens == 0) || (totalTokens == 0 && !fixedPriceBilling && !usePrice) {
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
 		quota = 0
@@ -293,7 +308,11 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 
 func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []*common.Message) {
 	if usage == nil {
-		usage = &dto.Usage{PromptTokens: relayInfo.GetEstimatePromptTokens(), TotalTokens: relayInfo.GetEstimatePromptTokens()}
+		if relayInfo.IsEmptyResponse() {
+			usage = &dto.Usage{}
+		} else {
+			usage = &dto.Usage{PromptTokens: relayInfo.GetEstimatePromptTokens(), TotalTokens: relayInfo.GetEstimatePromptTokens()}
+		}
 	}
 
 	var tieredUsedVars map[string]bool
@@ -301,9 +320,14 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		tieredUsedVars = billingexpr.UsedVarsByHash(snap.ExprString, snap.ExprHash)
 	}
 	var tieredResult *billingexpr.TieredResult
-	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, BuildTieredTokenParams(usage, false, tieredUsedVars))
-	if tieredOk {
-		tieredResult = tieredRes
+	var tieredOk bool
+	var tieredQuota int
+	var tieredRes *billingexpr.TieredResult
+	if !relayInfo.IsEmptyResponse() {
+		tieredOk, tieredQuota, tieredRes = TryTieredSettle(relayInfo, BuildTieredTokenParams(usage, false, tieredUsedVars))
+		if tieredOk {
+			tieredResult = tieredRes
+		}
 	}
 	fixedPriceBilling := tieredOk && isFixedPriceSettlement(relayInfo, tieredRes)
 
@@ -336,6 +360,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		},
 		ModelName:  billingModelName,
 		UsePrice:   usePrice,
+		ModelPrice: modelPrice,
 		ModelRatio: modelRatio,
 		GroupRatio: groupRatio,
 	}
@@ -364,7 +389,12 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	}
 
 	// record all the consume log even if quota is 0
-	if totalTokens == 0 && !fixedPriceBilling {
+	if relayInfo.IsEmptyResponse() && totalTokens == 0 {
+		quota = 0
+		logContent = append(logContent, common.NewMessage("Possibly an upstream timeout"))
+		logger.LogError(ctx, common.LogText("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d",
+			relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, billingModelName, relayInfo.FinalPreConsumedQuota))
+	} else if totalTokens == 0 && !fixedPriceBilling && !usePrice {
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
 		quota = 0

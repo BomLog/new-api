@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"github.com/thanhpk/randstr"
 	waffo "github.com/waffo-com/waffo-go"
 	"github.com/waffo-com/waffo-go/config"
@@ -390,28 +391,81 @@ func WaffoWebhook(c *gin.Context) {
 	}
 }
 
+func validateWaffoPaymentNotification(result *core.PaymentNotificationResult, topUp *model.TopUp) (decimal.Decimal, error) {
+	if result == nil {
+		return decimal.Zero, errors.New("missing payment notification result")
+	}
+	if configuredMerchantID := strings.TrimSpace(setting.WaffoMerchantId); configuredMerchantID != "" {
+		actualMerchantID, _ := result.MerchantInfo["merchantId"].(string)
+		if strings.TrimSpace(actualMerchantID) != configuredMerchantID {
+			return decimal.Zero, errors.New("merchant id mismatch")
+		}
+	}
+	if strings.TrimSpace(result.MerchantOrderID) == "" {
+		return decimal.Zero, errors.New("missing merchantOrderId")
+	}
+	if prID := strings.TrimSpace(result.PaymentRequestID); prID != "" && prID != strings.TrimSpace(result.MerchantOrderID) {
+		return decimal.Zero, errors.New("paymentRequestId mismatch")
+	}
+	expectedCurrency := strings.ToUpper(strings.TrimSpace(getWaffoCurrency()))
+	actualCurrency := strings.ToUpper(strings.TrimSpace(result.OrderCurrency))
+	if actualCurrency == "" || actualCurrency != expectedCurrency {
+		return decimal.Zero, errors.New("currency mismatch")
+	}
+	actualAmount, err := decimal.NewFromString(strings.TrimSpace(result.OrderAmount))
+	if err != nil || actualAmount.LessThanOrEqual(decimal.Zero) {
+		return decimal.Zero, errors.New("invalid orderAmount")
+	}
+	if topUp != nil {
+		expectedAmountStr := formatWaffoAmount(topUp.Money, expectedCurrency)
+		expectedAmount, expErr := decimal.NewFromString(expectedAmountStr)
+		if expErr != nil || !actualAmount.Equal(expectedAmount) {
+			return decimal.Zero, errors.New("orderAmount mismatch")
+		}
+	}
+	return actualAmount, nil
+}
+
 // handleWaffoPayment 处理支付完成通知
 func handleWaffoPayment(c *gin.Context, wh *core.WebhookHandler, result *core.PaymentNotificationResult) {
+	merchantOrderId := strings.TrimSpace(result.MerchantOrderID)
 	if result.OrderStatus != "PAY_SUCCESS" {
-		logger.LogInfo(c.Request.Context(), common.LogText("Waffo order not successful, top-up skipped trade_no=%s order_status=%s client_ip=%s", result.MerchantOrderID, result.OrderStatus, c.ClientIP()))
-		// 终态失败订单标记为 failed，避免永远停在 pending
-		if result.MerchantOrderID != "" {
-			if err := model.UpdatePendingTopUpStatus(result.MerchantOrderID, model.PaymentProviderWaffo, common.TopUpStatusFailed); err != nil &&
-				!errors.Is(err, model.ErrTopUpNotFound) &&
-				!errors.Is(err, model.ErrTopUpStatusInvalid) {
-				logger.LogError(c.Request.Context(), common.LogText("Waffo failed to mark order as failed trade_no=%s error=%q", result.MerchantOrderID, err.Error()))
+		logger.LogInfo(c.Request.Context(), common.LogText("Waffo order not successful, top-up skipped trade_no=%s order_status=%s client_ip=%s", merchantOrderId, result.OrderStatus, c.ClientIP()))
+		// 终态失败订单标记为 failed，避免永远停在 pending（仅在商户与订单金额/币种一致时更新）
+		if merchantOrderId != "" {
+			topUp := model.GetTopUpByTradeNo(merchantOrderId)
+			if topUp != nil && topUp.PaymentProvider == model.PaymentProviderWaffo {
+				if _, valErr := validateWaffoPaymentNotification(result, topUp); valErr == nil {
+					if err := model.UpdatePendingTopUpStatus(merchantOrderId, model.PaymentProviderWaffo, common.TopUpStatusFailed); err != nil &&
+						!errors.Is(err, model.ErrTopUpNotFound) &&
+						!errors.Is(err, model.ErrTopUpStatusInvalid) {
+						logger.LogError(c.Request.Context(), common.LogText("Waffo failed to mark order as failed trade_no=%s error=%q", merchantOrderId, err.Error()))
+					}
+				}
 			}
 		}
 		sendWaffoWebhookResponse(c, wh, true, "")
 		return
 	}
 
-	merchantOrderId := result.MerchantOrderID
+	topUp := model.GetTopUpByTradeNo(merchantOrderId)
+	paidAmount, valErr := validateWaffoPaymentNotification(result, topUp)
+	if valErr != nil {
+		logger.LogWarn(c.Request.Context(), common.LogText("Waffo callback validation failed trade_no=%s client_ip=%s error=%q", merchantOrderId, c.ClientIP(), valErr.Error()))
+		sendWaffoWebhookResponse(c, wh, false, valErr.Error())
+		return
+	}
 
 	LockOrder(merchantOrderId)
 	defer UnlockOrder(merchantOrderId)
 
-	if err := model.RechargeWaffo(merchantOrderId, c.ClientIP()); err != nil {
+	var err error
+	if zeroDecimalCurrencies[strings.ToUpper(strings.TrimSpace(getWaffoCurrency()))] {
+		err = model.RechargeWaffo(merchantOrderId, c.ClientIP())
+	} else {
+		err = model.RechargeWaffoWithAmount(merchantOrderId, paidAmount, c.ClientIP())
+	}
+	if err != nil {
 		logger.LogError(c.Request.Context(), common.LogText("Waffo top-up processing failed trade_no=%s client_ip=%s error=%q", merchantOrderId, c.ClientIP(), err.Error()))
 		sendWaffoWebhookResponse(c, wh, false, err.Error())
 		return

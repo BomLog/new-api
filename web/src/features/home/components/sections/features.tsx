@@ -17,222 +17,169 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import {
-  Zap,
-  Shield,
-  Globe,
   Code,
-  Gauge,
   DollarSign,
+  Gauge,
+  Globe,
+  Shield,
   Users,
-  HeartHandshake,
+  type LucideIcon,
 } from 'lucide-react'
+import { motion, useMotionTemplate, useMotionValue } from 'motion/react'
+import { useState, type MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { AnimateInView } from '@/components/animate-in-view'
+import { cn } from '@/lib/utils'
+
+import {
+  BoomEmblem,
+  BoomShockwaveBurst,
+  BoomWordmarkBadge,
+} from '../boom-brand-mark'
 
 interface FeaturesProps {
   className?: string
 }
 
-export function Features(_props: FeaturesProps) {
-  const { t } = useTranslation()
+interface FeatureItem {
+  id: string
+  title: string
+  desc: string
+  icon: LucideIcon
+}
 
-  const features = [
-    {
-      id: 'fast',
-      num: '01',
-      title: t('Lightning Fast'),
-      desc: t(
-        'Optimized network architecture ensures millisecond response times'
-      ),
-      span: 'md:col-span-2',
-      icon: <Zap className='size-4 text-blue-400' />,
-      visual: (
-        <div className='mt-4 grid grid-cols-3 gap-2'>
-          {['OpenAI', 'Claude', 'Gemini', 'DeepSeek', 'Qwen', 'Llama'].map(
-            (name) => (
-              <div
-                key={name}
-                className='border-border/30 bg-muted/20 text-muted-foreground flex items-center justify-center rounded-lg border px-3 py-2 text-xs transition-colors duration-300 hover:border-blue-500/30 hover:bg-blue-500/5'
-              >
-                {name}
-              </div>
-            )
-          )}
+interface FeatureBurstCardProps {
+  item: FeatureItem
+  index: number
+}
+
+function FeatureBurstCard(props: FeatureBurstCardProps) {
+  const [burstKey, setBurstKey] = useState<number>(0)
+  const Icon = props.item.icon
+
+  return (
+    <motion.div
+      onMouseEnter={() => setBurstKey((prev) => prev + 1)}
+      initial={{ opacity: 0, y: 16 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, amount: 0.25 }}
+      transition={{
+        duration: 0.45,
+        delay: props.index * 0.05,
+        ease: [0.22, 1, 0.36, 1],
+      }}
+      className='group relative flex flex-col overflow-hidden bg-[#090d1a]/92 p-6 transition-colors duration-300 hover:bg-[#0e1427]/95 md:p-7'
+    >
+      <div className='mb-4 flex items-center justify-between'>
+        <div className='relative flex size-10 items-center justify-center rounded-xl border border-white/12 bg-white/[0.05] text-slate-100 transition-all duration-300 group-hover:-translate-y-0.5 group-hover:border-orange-400/50 group-hover:bg-orange-500/15 group-hover:text-amber-200'>
+          <BoomShockwaveBurst burstKey={burstKey} size='sm' />
+          <Icon className='size-4' strokeWidth={1.75} aria-hidden='true' />
         </div>
-      ),
+        <BoomEmblem className='size-4 scale-75 opacity-0 transition-all duration-300 group-hover:scale-100 group-hover:rotate-45 group-hover:opacity-95' />
+      </div>
+
+      <h3 className='text-sm font-semibold text-white'>{props.item.title}</h3>
+      <p className='mt-1.5 text-sm leading-relaxed text-slate-400'>
+        {props.item.desc}
+      </p>
+    </motion.div>
+  )
+}
+
+export function Features(props: FeaturesProps) {
+  const { t } = useTranslation()
+  const mouseX = useMotionValue(-999)
+  const mouseY = useMotionValue(-999)
+
+  const spotlightOverlay = useMotionTemplate`radial-gradient(460px circle at ${mouseX}px ${mouseY}px, rgba(249, 115, 22, 0.18), rgba(168, 85, 247, 0.09) 45%, transparent 76%)`
+
+  const handleMouseMove = (event: MouseEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    mouseX.set(event.clientX - rect.left)
+    mouseY.set(event.clientY - rect.top)
+  }
+
+  const handleMouseLeave = () => {
+    mouseX.set(-999)
+    mouseY.set(-999)
+  }
+
+  const features: FeatureItem[] = [
+    {
+      id: 'developer',
+      title: t('Developer Friendly'),
+      desc: t('Compatible API routes for common AI application workflows'),
+      icon: Code,
+    },
+    {
+      id: 'performance',
+      title: t('High Performance'),
+      desc: t('Support for high concurrency with automatic load balancing'),
+      icon: Gauge,
+    },
+    {
+      id: 'billing',
+      title: t('Transparent Billing'),
+      desc: t('Pay-as-you-go with real-time usage monitoring'),
+      icon: DollarSign,
     },
     {
       id: 'secure',
-      num: '02',
       title: t('Secure & Reliable'),
       desc: t(
         'Enterprise-grade security with comprehensive permission management'
       ),
-      span: 'md:col-span-1',
-      icon: <Shield className='size-4 text-emerald-400' />,
-      visual: (
-        <div className='mt-4 flex items-center justify-center'>
-          <div className='relative'>
-            <div className='flex size-16 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/5'>
-              <Shield
-                className='size-7 text-emerald-500/70'
-                strokeWidth={1.5}
-              />
-            </div>
-            <div className='absolute -top-1 -right-1 flex size-4 items-center justify-center rounded-full bg-emerald-500'>
-              <svg
-                className='size-2.5 text-white'
-                fill='none'
-                viewBox='0 0 24 24'
-                stroke='currentColor'
-                strokeWidth={3}
-              >
-                <path
-                  strokeLinecap='round'
-                  strokeLinejoin='round'
-                  d='m4.5 12.75 6 6 9-13.5'
-                />
-              </svg>
-            </div>
-          </div>
-        </div>
-      ),
+      icon: Shield,
+    },
+    {
+      id: 'team',
+      title: t('Team Collaboration'),
+      desc: t('Multi-user management with flexible permission allocation'),
+      icon: Users,
     },
     {
       id: 'global',
-      num: '03',
       title: t('Global Coverage'),
       desc: t('Multi-region deployment for stable global access'),
-      span: 'md:col-span-1',
-      icon: <Globe className='size-4 text-violet-400' />,
-      visual: (
-        <div className='mt-4 space-y-2'>
-          {[t('Load Balancing'), t('Rate Limiting'), t('Cost Tracking')].map(
-            (step, i) => (
-              <div key={step} className='flex items-center gap-2'>
-                <div
-                  className={`flex size-6 items-center justify-center rounded-full text-[10px] font-bold ${
-                    i === 1
-                      ? 'border border-blue-500/30 bg-blue-500/20 text-blue-500'
-                      : 'border-border/40 bg-muted text-muted-foreground border'
-                  }`}
-                >
-                  {i + 1}
-                </div>
-                <div className='bg-border/40 h-px flex-1' />
-                <span className='text-muted-foreground text-xs'>{step}</span>
-              </div>
-            )
-          )}
-        </div>
-      ),
-    },
-    {
-      id: 'developer',
-      num: '04',
-      title: t('Developer Friendly'),
-      desc: t('Compatible API routes for common AI application workflows'),
-      span: 'md:col-span-2',
-      icon: <Code className='size-4 text-amber-400' />,
-      visual: (
-        <div className='mt-4 flex items-center gap-3'>
-          <div className='flex -space-x-2'>
-            {['API', 'SDK', 'CLI', 'Docs'].map((n) => (
-              <div
-                key={n}
-                className='border-background from-muted to-muted/60 text-muted-foreground flex size-8 items-center justify-center rounded-full border-2 bg-gradient-to-br text-[9px] font-bold'
-              >
-                {n}
-              </div>
-            ))}
-          </div>
-          <div className='text-muted-foreground flex items-center gap-1.5 text-xs'>
-            <Code className='size-3.5 text-blue-500' />
-            {t('Multi-protocol Compatible')}
-          </div>
-        </div>
-      ),
-    },
-  ]
-
-  const additionalFeatures = [
-    {
-      icon: <Gauge className='size-5' strokeWidth={1.5} />,
-      title: t('High Performance'),
-      desc: t('Support for high concurrency with automatic load balancing'),
-    },
-    {
-      icon: <DollarSign className='size-5' strokeWidth={1.5} />,
-      title: t('Transparent Billing'),
-      desc: t('Pay-as-you-go with real-time usage monitoring'),
-    },
-    {
-      icon: <Users className='size-5' strokeWidth={1.5} />,
-      title: t('Team Collaboration'),
-      desc: t('Multi-user management with flexible permission allocation'),
-    },
-    {
-      icon: <HeartHandshake className='size-5' strokeWidth={1.5} />,
-      title: t('Open Source'),
-      desc: t('Community driven, self-hosted, and extensible'),
+      icon: Globe,
     },
   ]
 
   return (
-    <section className='relative z-10 px-6 py-24 md:py-32'>
+    <section className={cn('px-6 py-16 md:py-24', props.className)}>
       <div className='mx-auto max-w-6xl'>
-        <AnimateInView className='mb-16 max-w-lg'>
-          <p className='mb-3 font-mono text-xs font-medium tracking-widest text-sky-300 uppercase'>
-            {t('Core Features')}
-          </p>
-          <h2 className='text-2xl leading-tight font-bold tracking-tight md:text-3xl'>
-            {t('Built for developers,')}
-            <br />
-            {t('designed for scale')}
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, amount: 0.4 }}
+          transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+          className='mb-10 max-w-xl'
+        >
+          <div className='mb-3 flex items-center gap-2.5'>
+            <BoomWordmarkBadge compact />
+            <span className='text-xs font-medium tracking-wider text-slate-400 uppercase'>
+              {t('Core Features')}
+            </span>
+          </div>
+          <h2 className='text-2xl leading-tight font-semibold tracking-tight text-white md:text-3xl'>
+            {t('Built for developers,')} {t('designed for scale')}
           </h2>
-        </AnimateInView>
+        </motion.div>
 
-        {/* Bento grid */}
-        <div className='grid gap-4 md:grid-cols-3'>
-          {features.map((f, i) => (
-            <AnimateInView
-              key={f.id}
-              delay={i * 100}
-              animation='scale-in'
-              className={`space-panel group p-7 transition-transform duration-300 hover:-translate-y-1 md:p-8 ${f.span}`}
-            >
-              <div className='mb-3 flex items-center gap-3'>
-                <span className='flex size-7 items-center justify-center rounded-md border border-sky-300/30 bg-sky-400/10 font-mono text-[10px] font-semibold text-sky-200 tabular-nums'>
-                  {f.num}
-                </span>
-                <h3 className='text-sm font-semibold'>{f.title}</h3>
-              </div>
-              <p className='text-muted-foreground text-sm leading-relaxed'>
-                {f.desc}
-              </p>
-              {f.visual}
-            </AnimateInView>
-          ))}
-        </div>
+        {/* Cursor-tracking cosmic supernova spotlight bento grid */}
+        <div
+          onMouseMove={handleMouseMove}
+          onMouseLeave={handleMouseLeave}
+          className='relative grid grid-cols-1 gap-px overflow-hidden rounded-2xl border border-white/12 bg-white/10 sm:grid-cols-2 lg:grid-cols-3'
+        >
+          <motion.div
+            aria-hidden='true'
+            className='pointer-events-none absolute inset-0 z-10'
+            style={{ background: spotlightOverlay }}
+          />
 
-        {/* Additional features row */}
-        <div className='mt-12 grid grid-cols-2 gap-8 md:grid-cols-4 md:gap-12'>
-          {additionalFeatures.map((f, i) => (
-            <AnimateInView
-              key={f.title}
-              delay={i * 100}
-              animation='fade-up'
-              className='flex flex-col items-center text-center'
-            >
-              <div className='mb-3 flex size-12 items-center justify-center rounded-xl border border-violet-300/30 bg-violet-400/10 text-violet-200 shadow-[0_0_24px_-8px_oklch(0.7_0.17_290/80%)]'>
-                {f.icon}
-              </div>
-              <h3 className='mb-1.5 text-sm font-semibold'>{f.title}</h3>
-              <p className='text-muted-foreground max-w-[200px] text-xs leading-relaxed'>
-                {f.desc}
-              </p>
-            </AnimateInView>
+          {features.map((item, idx) => (
+            <FeatureBurstCard key={item.id} item={item} index={idx} />
           ))}
         </div>
       </div>

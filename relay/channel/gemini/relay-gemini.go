@@ -145,6 +145,24 @@ func countGeminiBillableFunctionCalls(info *relaycommon.RelayInfo, response *dto
 	}
 }
 
+func geminiResponseHasPartOutput(response *dto.GeminiChatResponse) bool {
+	if response == nil {
+		return false
+	}
+	for _, candidate := range response.Candidates {
+		for _, part := range candidate.Content.Parts {
+			if part.Text != "" ||
+				part.FunctionCall != nil ||
+				(part.InlineData != nil && part.InlineData.MimeType != "") ||
+				part.ExecutableCode != nil ||
+				part.CodeExecutionResult != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func buildUsageFromGeminiResponse(c *gin.Context, info *relaycommon.RelayInfo, response *dto.GeminiChatResponse) dto.Usage {
 	metadata := response.GetUsageMetadata()
 	if dto.HasGeminiUsageMetadataTokens(metadata) {
@@ -152,7 +170,17 @@ func buildUsageFromGeminiResponse(c *gin.Context, info *relaycommon.RelayInfo, r
 		patchGeminiZeroCompletionUsage(c, info, &usage, geminiResponseUsageText(response), geminiResponseInlineImageCount(response))
 		return usage
 	}
-	usage := service.ResponseText2Usage(c, geminiResponseUsageText(response), info.UpstreamModelName, info.GetEstimatePromptTokens())
+	usageText := geminiResponseUsageText(response)
+	imageCount := geminiResponseInlineImageCount(response)
+	if usageText == "" && imageCount == 0 && !geminiResponseHasPartOutput(response) && !info.HasResponseBillableToolCalls() {
+		info.MarkEmptyResponse()
+		return dto.Usage{}
+	}
+	usage := service.ResponseText2Usage(c, usageText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+	if imageCount != 0 && usage.CompletionTokens == 0 {
+		usage.CompletionTokens = imageCount * 1400
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
 	attachEstimatedGeminiBillingUsage(usage)
 	return *usage
 }
@@ -239,7 +267,10 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		grounding.commit(info)
 		countGeminiBillableFunctionCalls(info, &geminiResponse)
 
-		// 统计图片数量
+		// 统计图片数量与流式有效输出
+		if geminiResponseHasPartOutput(&geminiResponse) {
+			info.HasStreamOutput = true
+		}
 		for _, candidate := range geminiResponse.Candidates {
 			for _, part := range candidate.Content.Parts {
 				if part.InlineData != nil && part.InlineData.MimeType != "" {
@@ -268,18 +299,28 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	})
 	info.StreamStatus.RequireTerminal()
 
-	if !hasBillableUsageMetadata {
-		if info.ReceivedResponseCount > 0 {
+	hasStreamOutput := responseText.Len() > 0 ||
+		imageCount > 0 ||
+		(info != nil && (info.HasStreamOutput || info.HasResponseBillableToolCalls())) ||
+		usage.CompletionTokens > 0
+	upstreamStreamFailed := info != nil && info.StreamStatus != nil && info.StreamStatus.UpstreamFailed()
+
+	if !hasStreamOutput && upstreamStreamFailed && streamErr == nil {
+		usage = &dto.Usage{}
+		info.MarkEmptyResponse()
+	} else if !hasBillableUsageMetadata {
+		if info.ReceivedResponseCount > 0 && hasStreamOutput {
 			usage = service.ResponseText2Usage(c, responseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+			if imageCount != 0 && usage.CompletionTokens == 0 {
+				usage.CompletionTokens = imageCount * 1400
+				usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+				common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
+			}
+			attachEstimatedGeminiBillingUsage(usage)
 		} else {
 			usage = &dto.Usage{}
+			info.MarkEmptyResponse()
 		}
-		if imageCount != 0 && usage.CompletionTokens == 0 {
-			usage.CompletionTokens = imageCount * 1400
-			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-			common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
-		}
-		attachEstimatedGeminiBillingUsage(usage)
 	} else {
 		patchGeminiZeroCompletionUsage(c, info, usage, responseText.String(), imageCount)
 	}

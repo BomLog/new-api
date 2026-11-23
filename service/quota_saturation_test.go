@@ -1,11 +1,13 @@
 package service
 
 import (
+	"encoding/binary"
 	"math"
 	"net/http"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	hostdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -13,6 +15,7 @@ import (
 	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -137,4 +140,72 @@ func TestPreConsumeBillingRejectsNegativeQuotaBeforeDeduction(t *testing.T) {
 	require.Equal(t, types.ErrorCodeModelPriceError, apiErr.GetErrorCode())
 	require.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
 	require.Nil(t, info.Billing)
+}
+
+func TestAudioUsePriceTrustQuotaMidjourneyAndHEIFRegressions(t *testing.T) {
+	t.Run("calculateAudioQuota uses ModelPrice when UsePrice is enabled", func(t *testing.T) {
+		oldQuotaPerUnit := common.QuotaPerUnit
+		common.QuotaPerUnit = 500_000
+		t.Cleanup(func() { common.QuotaPerUnit = oldQuotaPerUnit })
+
+		quota, clamp := calculateAudioQuota(QuotaInfo{
+			ModelName:  "tts-fixed",
+			UsePrice:   true,
+			ModelPrice: 0.05,
+			GroupRatio: 2,
+		})
+		require.Nil(t, clamp)
+		assert.Equal(t, 50_000, quota)
+	})
+
+	t.Run("tryAcquireTrustedInFlight caps concurrent unreserved quota and count", func(t *testing.T) {
+		const userID = 99001
+		const tokenID = 99002
+		const trustQuota = 500_000.0
+		const userQuota = 650_000
+		const tokenQuota = 650_000
+
+		held1, ok := tryAcquireTrustedInFlight(userID, tokenID, false, userQuota, tokenQuota, 100_000, trustQuota)
+		require.True(t, ok)
+		assert.Equal(t, 100_000, held1)
+
+		// Remaining unreserved margin above trustQuota is now 50,000, so another 100,000 request must fall back to pre-consume.
+		_, ok = tryAcquireTrustedInFlight(userID, tokenID, false, userQuota, tokenQuota, 100_000, trustQuota)
+		assert.False(t, ok)
+
+		releaseTrustedInFlight(userID, tokenID, false, held1)
+
+		// After release, trust fast-path is available again.
+		held2, ok := tryAcquireTrustedInFlight(userID, tokenID, false, userQuota, tokenQuota, 100_000, trustQuota)
+		require.True(t, ok)
+		releaseTrustedInFlight(userID, tokenID, false, held2)
+	})
+
+	t.Run("CoverPlusActionToNormalAction rejects truncated customId without panic", func(t *testing.T) {
+		for _, malformed := range []string{"MJ", "MJ::JOB", "MJ::JOB::upsample", "MJ::variation"} {
+			req := &hostdto.MidjourneyRequest{CustomId: malformed}
+			require.NotPanics(t, func() {
+				resp := CoverPlusActionToNormalAction(req)
+				require.NotNil(t, resp)
+			})
+		}
+	})
+
+	t.Run("parseHEIFDimensions rejects overflowing 64-bit boxSize without panic", func(t *testing.T) {
+		// Minimal ftyp box ("heic") followed by a meta box claiming extended 64-bit size 0xFFFFFFFFFFFFFFFF.
+		data := make([]byte, 32)
+		binary.BigEndian.PutUint32(data[0:4], 16)
+		copy(data[4:8], "ftyp")
+		copy(data[8:12], "heic")
+		binary.BigEndian.PutUint32(data[16:20], 1) // 64-bit extended size indicator
+		copy(data[20:24], "meta")
+		binary.BigEndian.PutUint64(data[24:32], math.MaxUint64)
+
+		require.NotPanics(t, func() {
+			w, h, ok := parseHEIFDimensions(data)
+			assert.False(t, ok)
+			assert.Zero(t, w)
+			assert.Zero(t, h)
+		})
+	})
 }

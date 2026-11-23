@@ -429,6 +429,9 @@ type webSocketSource struct {
 }
 
 func (s *webSocketSource) next() (jsplugin.StreamEvent, bool, error) {
+	if s.limit > 0 {
+		s.session.SetReadLimit(int64(s.limit) + 1)
+	}
 	messageType, data, err := s.session.ReadMessage()
 	if err != nil {
 		var closeErr *websocket.CloseError

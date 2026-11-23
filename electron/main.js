@@ -254,8 +254,12 @@ function startServer() {
       return;
     }
 
-    // 生产模式：启动二进制服务器
-    const env = { ...process.env, PORT: PORT.toString() };
+    // 生产模式：启动二进制服务器（默认仅监听本地回环地址，防止局域网暴露）
+    const env = {
+      ...process.env,
+      HOST: process.env.HOST || '127.0.0.1',
+      PORT: PORT.toString()
+    };
 
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
@@ -385,6 +389,31 @@ function startServer() {
   });
 }
 
+function isAllowedAppNavigationURL(rawUrl, loadPort) {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'http:') {
+      return false;
+    }
+    const expectedPort = String(loadPort);
+    return (
+      (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost') &&
+      parsed.port === expectedPort
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isSafeExternalHttpURL(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 function createWindow() {
   const isDev = process.env.NODE_ENV === 'development';
   const loadPort = isDev ? DEV_FRONTEND_PORT : PORT;
@@ -395,10 +424,27 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
-      contextIsolation: true
+      contextIsolation: true,
+      sandbox: true
     },
     title: 'New API',
     icon: path.join(__dirname, 'icon.png')
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (!isAllowedAppNavigationURL(url, loadPort) && isSafeExternalHttpURL(url)) {
+      shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!isAllowedAppNavigationURL(url, loadPort)) {
+      event.preventDefault();
+      if (isSafeExternalHttpURL(url)) {
+        shell.openExternal(url);
+      }
+    }
   });
 
   mainWindow.loadURL(`http://127.0.0.1:${loadPort}`);

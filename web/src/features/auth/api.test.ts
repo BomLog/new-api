@@ -23,7 +23,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { api, type RefreshOutcome } from '@/lib/api'
 import type { AuthBundle } from '@/stores/auth-store'
 
-import { executeLogout } from './api'
+import { executeLogout, githubOAuthStart } from './api'
 import { useOAuthLogin } from './hooks/use-oauth-login'
 import { consumeOAuthLoginRedirect } from './lib/oauth-callback-mode'
 
@@ -177,5 +177,19 @@ describe('logout coordination', () => {
         refresh: async () => transient,
       })
     ).rejects.toBe(originalError)
+  })
+})
+
+describe('githubOAuthStart URL construction', () => {
+  test('encodes query parameters and opens with noopener,noreferrer', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
+
+    await githubOAuthStart('id&evil=1', 'state#frag')
+
+    expect(openSpy).toHaveBeenCalledWith(
+      'https://github.com/login/oauth/authorize?client_id=id%26evil%3D1&state=state%23frag&scope=user%3Aemail',
+      '_blank',
+      'noopener,noreferrer'
+    )
   })
 })

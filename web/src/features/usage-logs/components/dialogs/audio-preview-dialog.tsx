@@ -27,6 +27,7 @@ import { Button } from '@/components/ui/button'
 import { IconBadge } from '@/components/ui/icon-badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Spinner } from '@/components/ui/spinner'
+import { isHttpUrl, openExternalHttpUrl } from '@/lib/content-format'
 
 import type { AudioClip } from '../../types'
 
@@ -59,10 +60,12 @@ function AudioClipCard({ clip }: { clip: AudioClip }) {
   const title = clip.title || t('Untitled')
   const tags = clip.tags || clip.metadata?.tags || ''
   const duration = clip.duration || clip.metadata?.duration
-  const imageUrl = clip.image_url || clip.image_large_url
+  const rawImageUrl = clip.image_url || clip.image_large_url
+  const imageUrl = rawImageUrl && isHttpUrl(rawImageUrl) ? rawImageUrl : undefined
   const audioUrl = clip.audio_url
 
   if (!audioUrl) return null
+  const isSafeAudioUrl = isHttpUrl(audioUrl)
 
   return (
     <div className='bg-card flex gap-4 rounded-lg border p-4'>
@@ -93,20 +96,22 @@ function AudioClipCard({ clip }: { clip: AudioClip }) {
           <p className='text-muted-foreground mb-2 truncate text-xs'>{tags}</p>
         )}
 
-        {hasError ? (
+        {hasError || !isSafeAudioUrl ? (
           <div className='flex flex-wrap items-center gap-2'>
             <span className='text-destructive text-xs'>
               {t('Audio playback failed')}
             </span>
-            <Button
-              variant='outline'
-              size='sm'
-              className='h-7 gap-1 text-xs'
-              onClick={() => window.open(audioUrl, '_blank')}
-            >
-              <ExternalLink className='h-3 w-3' />
-              {t('Open in new tab')}
-            </Button>
+            {isSafeAudioUrl && (
+              <Button
+                variant='outline'
+                size='sm'
+                className='h-7 gap-1 text-xs'
+                onClick={() => openExternalHttpUrl(audioUrl)}
+              >
+                <ExternalLink className='h-3 w-3' />
+                {t('Open in new tab')}
+              </Button>
+            )}
             <Button
               variant='outline'
               size='sm'

@@ -14,7 +14,9 @@ import (
 )
 
 const (
+	TaskArtifactAccessContextKey     = "task_artifact_access"
 	TaskArtifactAccessQueryParameter = "access"
+	MidjourneyImageArtifactKey       = "mj_image"
 	taskArtifactAccessVersion        = "v1"
 	taskArtifactAccessLength         = 43
 	maxTaskArtifactTaskIDLength      = 191
@@ -134,4 +136,21 @@ func BuildTaskArtifactContentURL(taskID, artifactKey string) (string, error) {
 	query.Set(TaskArtifactAccessQueryParameter, access)
 	baseURL.RawQuery = query.Encode()
 	return baseURL.String(), nil
+}
+
+// BuildMidjourneyImageProxyURL constructs a capability-signed Midjourney image
+// proxy URL bound to mjID.
+func BuildMidjourneyImageProxyURL(mjID string, randSuffix string) string {
+	base := strings.TrimRight(system_setting.ServerAddress, "/") + "/mj/image/" + url.PathEscape(strings.TrimSpace(mjID))
+	values := url.Values{}
+	if access, err := IssueTaskArtifactAccess(mjID, MidjourneyImageArtifactKey); err == nil && access != "" {
+		values.Set(TaskArtifactAccessQueryParameter, access)
+	}
+	if randSuffix != "" {
+		values.Set("rand", randSuffix)
+	}
+	if len(values) == 0 {
+		return base
+	}
+	return base + "?" + values.Encode()
 }

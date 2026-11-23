@@ -215,6 +215,30 @@ func (s *StreamStatus) IsNormalEnd() bool {
 		s.EndReason == StreamEndReasonHandlerStop
 }
 
+// UpstreamFailed reports whether the stream failed or truncated on the upstream
+// side rather than ending normally or being closed by the downstream client.
+func (s *StreamStatus) UpstreamFailed() bool {
+	if s == nil {
+		return false
+	}
+	snap := s.OutcomeSnapshot()
+	if snap.EndReason == StreamEndReasonClientGone || snap.EndReason == StreamEndReasonPingFail {
+		return false
+	}
+	if snap.Response == ResponseOutcomeFailed || snap.HasErrors {
+		return true
+	}
+	switch snap.EndReason {
+	case StreamEndReasonScannerErr, StreamEndReasonTimeout, StreamEndReasonPanic:
+		return true
+	case StreamEndReasonHandlerStop:
+		return s.EndError != nil
+	case StreamEndReasonEOF:
+		return snap.ExpectsTerminal && snap.Response == ResponseOutcomeUnknown
+	}
+	return false
+}
+
 func (s *StreamStatus) Summary() string {
 	if s == nil {
 		return "StreamStatus<nil>"

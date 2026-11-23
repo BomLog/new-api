@@ -69,9 +69,20 @@ func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		}
 	})
 
-	if !containStreamUsage {
-		usage = service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-		usage.CompletionTokens += toolCount * 7
+	hasStreamOutput := responseTextBuilder.Len() > 0 || toolCount > 0 || usage.CompletionTokens > 0
+	upstreamStreamFailed := info != nil && info.StreamStatus != nil && info.StreamStatus.UpstreamFailed()
+	if !hasStreamOutput && upstreamStreamFailed {
+		usage = &dto.Usage{}
+		info.MarkEmptyResponse()
+	} else if !containStreamUsage {
+		if hasStreamOutput {
+			usage = service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+			usage.CompletionTokens += toolCount * 7
+			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		} else {
+			usage = &dto.Usage{}
+			info.MarkEmptyResponse()
+		}
 	}
 
 	helper.Done(c)

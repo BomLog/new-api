@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { PAYMENT_TYPES } from '../constants'
 import {
@@ -24,7 +24,10 @@ import {
   isStripePayment,
   isWaffoPayment,
   isWaffoPancakePayment,
+  submitPaymentForm,
 } from './payment'
+
+afterEach(() => vi.restoreAllMocks())
 
 describe('payment type classification', () => {
   test('keeps Waffo and Waffo Pancake on their dedicated flows', () => {
@@ -81,5 +84,31 @@ describe('payment dispatch', () => {
 
     expect(success).toBe(false)
     expect(called).toBe(false)
+  })
+})
+
+describe('submitPaymentForm URL validation', () => {
+  test('rejects javascript: action URLs without submitting form', () => {
+    const submitSpy = vi
+      .spyOn(HTMLFormElement.prototype, 'submit')
+      .mockImplementation(() => {})
+
+    submitPaymentForm('javascript:alert(1)', { pid: '1000' })
+
+    expect(submitSpy).not.toHaveBeenCalled()
+  })
+
+  test('submits https payment form with noopener noreferrer', () => {
+    let submittedRel = ''
+    const submitSpy = vi
+      .spyOn(HTMLFormElement.prototype, 'submit')
+      .mockImplementation(function (this: HTMLFormElement) {
+        submittedRel = this.getAttribute('rel') ?? ''
+      })
+
+    submitPaymentForm('https://pay.example.com/submit.php', { pid: '1000' })
+
+    expect(submitSpy).toHaveBeenCalledTimes(1)
+    expect(submittedRel).toBe('noopener noreferrer')
   })
 })

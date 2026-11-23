@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -26,6 +27,12 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	info.IsStream = true
 	clientConn := info.ClientWs
 	targetConn := info.TargetWs
+	maxReqMB := constant.MaxRequestBodyMB
+	if maxReqMB <= 0 {
+		maxReqMB = 32
+	}
+	clientConn.SetReadLimit(int64(maxReqMB) << 20)
+	targetConn.SetReadLimit(64 << 20)
 
 	clientClosed := make(chan struct{})
 	targetClosed := make(chan struct{})
@@ -183,15 +190,21 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 						usage.InputTokenDetails.TextTokens += realtimeUsage.InputTokenDetails.TextTokens
 						usage.OutputTokenDetails.AudioTokens += realtimeUsage.OutputTokenDetails.AudioTokens
 						usage.OutputTokenDetails.TextTokens += realtimeUsage.OutputTokenDetails.TextTokens
-						quota, err = preConsumeUsage(c, info, usage, sumUsage)
+						turnUsage := usage
+						usage = &dto.RealtimeUsage{}
+						localUsage = &dto.RealtimeUsage{}
+						quota, err = preConsumeUsage(c, info, turnUsage, sumUsage)
 						if err != nil {
+							helper.WssError(c, clientConn, types.OpenAIError{
+								Message: err.Error(),
+								Type:    "insufficient_quota",
+								Code:    "insufficient_quota",
+							})
+							_ = clientConn.Close()
+							_ = targetConn.Close()
 							errChan <- fmt.Errorf("error consume usage: %v", err)
 							return
 						}
-						// 本次计费完成，清除
-						usage = &dto.RealtimeUsage{}
-
-						localUsage = &dto.RealtimeUsage{}
 					} else {
 						textToken, audioToken, err := service.CountTokenRealtime(info, *realtimeEvent, info.UpstreamModelName)
 						if err != nil {
@@ -204,14 +217,20 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 						localUsage.InputTokens += textToken + audioToken
 						localUsage.InputTokenDetails.TextTokens += textToken
 						localUsage.InputTokenDetails.AudioTokens += audioToken
-						quota, err = preConsumeUsage(c, info, localUsage, sumUsage)
+						turnUsage := localUsage
+						localUsage = &dto.RealtimeUsage{}
+						quota, err = preConsumeUsage(c, info, turnUsage, sumUsage)
 						if err != nil {
+							helper.WssError(c, clientConn, types.OpenAIError{
+								Message: err.Error(),
+								Type:    "insufficient_quota",
+								Code:    "insufficient_quota",
+							})
+							_ = clientConn.Close()
+							_ = targetConn.Close()
 							errChan <- fmt.Errorf("error consume usage: %v", err)
 							return
 						}
-						// 本次计费完成，清除
-						localUsage = &dto.RealtimeUsage{}
-						// print now usage
 					}
 					logger.LogInfo(c, common.LogText("realtime streaming sumUsage: %v", sumUsage))
 					logger.LogInfo(c, common.LogText("realtime streaming localUsage: %v", localUsage))

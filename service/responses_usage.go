@@ -101,10 +101,18 @@ func (a *ResponsesUsageAccumulator) Finish() *dto.Usage {
 			a.usage.CompletionTokens = tokenkit.Count(a.info.GetUpstreamModelName(), output)
 		}
 	}
+	upstreamFailed := a.info != nil && a.info.StreamStatus != nil && a.info.StreamStatus.UpstreamFailed()
+	hasOutput := a.usage.CompletionTokens != 0 || a.outputText.Len() > 0 || (a.info != nil && a.info.HasResponseBillableToolCalls())
+	completedEmptyWithoutUsage := a.info != nil && a.info.StreamStatus != nil &&
+		a.info.StreamStatus.ResponseOutcome() == string(relaycommon.ResponseOutcomeCompleted) &&
+		!hasOutput && !dto.HasOpenAIUsageTokens(a.usage)
 	// Upstream bills the prompt as soon as it starts generating, so a stream
 	// that produced any event but no usage still owes its input tokens unless
-	// upstream reported an explicit failure.
-	billsPrompt := a.usage.CompletionTokens != 0 || (a.started && !a.info.StreamStatus.ResponseFailed())
+	// upstream failed/truncated or completed empty without reporting usage.
+	billsPrompt := hasOutput || (a.started && !upstreamFailed && !completedEmptyWithoutUsage)
+	if !hasOutput && !dto.HasOpenAIUsageTokens(a.usage) && (!a.started || upstreamFailed || completedEmptyWithoutUsage) {
+		a.info.MarkEmptyResponse()
+	}
 	if a.usage.PromptTokens == 0 && billsPrompt {
 		a.usage.PromptTokens = a.info.GetEstimatePromptTokens()
 	}

@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { MotionConfig } from 'motion/react'
 import { useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -26,14 +27,8 @@ import { useTheme } from '@/context/theme-provider'
 import { isLikelyHtml } from '@/lib/content-format'
 import { useAuthStore } from '@/stores/auth-store'
 
-import {
-  ApiPreview,
-  CTA,
-  Features,
-  Hero,
-  HowItWorks,
-  Stats,
-} from './components'
+import { CTA, Features, Hero, HowItWorks, Stats } from './components'
+import { CosmicSupernovaBackdrop } from './components/cosmic-supernova-backdrop'
 import { useHomePageContent } from './hooks'
 
 export function Home() {
@@ -128,14 +123,18 @@ export function Home() {
   }
 
   return (
-    <PublicLayout showMainContainer={false} className='dark home-space'>
-      <Hero isAuthenticated={isAuthenticated} />
-      <Stats />
-      <ApiPreview />
-      <Features />
-      <HowItWorks />
-      <CTA isAuthenticated={isAuthenticated} />
-      <Footer />
-    </PublicLayout>
+    <MotionConfig reducedMotion='never'>
+      <PublicLayout showMainContainer={false} className='dark boom-cosmos'>
+        <CosmicSupernovaBackdrop />
+        <main className='relative z-10'>
+          <Hero isAuthenticated={isAuthenticated} />
+          <Stats />
+          <Features />
+          <HowItWorks />
+          <CTA isAuthenticated={isAuthenticated} />
+        </main>
+        <Footer className='relative z-10' />
+      </PublicLayout>
+    </MotionConfig>
   )
 }

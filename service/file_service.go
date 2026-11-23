@@ -523,23 +523,34 @@ func parseHEIFDimensions(data []byte) (int, int, bool) {
 	// Walk top-level boxes to find "meta"
 	offset := 0
 	for offset+8 <= size {
-		boxSize := int(binary.BigEndian.Uint32(data[offset : offset+4]))
+		rawSize := uint64(binary.BigEndian.Uint32(data[offset : offset+4]))
 		boxType := string(data[offset+4 : offset+8])
 		headerLen := 8
+		remaining := size - offset
 
-		if boxSize == 1 {
+		var boxSize int
+		if rawSize == 1 {
 			// 64-bit extended size
-			if offset+16 > size {
+			if remaining < 16 {
 				break
 			}
-			boxSize = int(binary.BigEndian.Uint64(data[offset+8 : offset+16]))
+			extSize := binary.BigEndian.Uint64(data[offset+8 : offset+16])
 			headerLen = 16
-		} else if boxSize == 0 {
+			if extSize < uint64(headerLen) || extSize > uint64(remaining) {
+				break
+			}
+			boxSize = int(extSize)
+		} else if rawSize == 0 {
 			// box extends to end of data
-			boxSize = size - offset
+			boxSize = remaining
+		} else {
+			if rawSize < uint64(headerLen) || rawSize > uint64(remaining) {
+				break
+			}
+			boxSize = int(rawSize)
 		}
 
-		if boxSize < headerLen || offset+boxSize > size {
+		if boxSize < headerLen || boxSize > remaining {
 			break
 		}
 
@@ -562,12 +573,30 @@ func findISPE(data []byte) (int, int, bool) {
 	offset := 0
 	size := len(data)
 	for offset+8 <= size {
-		boxSize := int(binary.BigEndian.Uint32(data[offset : offset+4]))
+		rawSize := uint64(binary.BigEndian.Uint32(data[offset : offset+4]))
 		boxType := string(data[offset+4 : offset+8])
-		if boxSize < 8 || offset+boxSize > size {
-			break
+		remaining := size - offset
+		headerLen := 8
+		var boxSize int
+		if rawSize == 1 {
+			if remaining < 16 {
+				break
+			}
+			extSize := binary.BigEndian.Uint64(data[offset+8 : offset+16])
+			headerLen = 16
+			if extSize < uint64(headerLen) || extSize > uint64(remaining) {
+				break
+			}
+			boxSize = int(extSize)
+		} else if rawSize == 0 {
+			boxSize = remaining
+		} else {
+			if rawSize < uint64(headerLen) || rawSize > uint64(remaining) {
+				break
+			}
+			boxSize = int(rawSize)
 		}
-		content := data[offset+8 : offset+boxSize]
+		content := data[offset+headerLen : offset+boxSize]
 		switch boxType {
 		case "iprp", "ipco":
 			if w, h, ok := findISPE(content); ok {

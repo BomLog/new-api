@@ -153,10 +153,17 @@ func convertResponsesResponseForClient(c *gin.Context, info *relaycommon.RelayIn
 	}
 
 	usage := relayconvert.UsageFromResponsesUsage(response.Usage)
-	if usage == nil || usage.TotalTokens == 0 {
+	if usage == nil || (!dto.HasOpenAIUsageTokens(usage) && !hasPositiveUsageCost(usage.Cost)) {
 		text := service.ExtractOutputTextFromResponses(response)
-		usage = service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
-		response.Usage = relayconvert.UsageFromChatUsage(usage)
+		if text != "" || responsesResponseHasOutput(response) || info.HasResponseBillableToolCalls() {
+			usage = service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
+			response.Usage = relayconvert.UsageFromChatUsage(usage)
+		} else {
+			if usage == nil {
+				usage = &dto.Usage{}
+			}
+			info.MarkEmptyResponse()
+		}
 	}
 
 	result, err := service.ConvertResponse(c, info, info.RelayFormat, response)
@@ -349,9 +356,18 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	}
 
 	usage := state.Usage()
-	if usage == nil || usage.TotalTokens == 0 {
-		usage = service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-		state.SetUsage(usage)
+	upstreamStreamFailed := info != nil && info.StreamStatus != nil && info.StreamStatus.UpstreamFailed()
+	if state.UsageText() == "" && !info.HasResponseBillableToolCalls() && upstreamStreamFailed {
+		usage = &dto.Usage{}
+		info.MarkEmptyResponse()
+	} else if usage == nil || (!dto.HasOpenAIUsageTokens(usage) && !hasPositiveUsageCost(usage.Cost)) {
+		if state.UsageText() != "" || info.HasResponseBillableToolCalls() {
+			usage = service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+			state.SetUsage(usage)
+		} else {
+			usage = &dto.Usage{}
+			info.MarkEmptyResponse()
+		}
 	}
 	if info.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone {
 		return usage, nil

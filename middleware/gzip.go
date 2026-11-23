@@ -39,13 +39,14 @@ func DecompressRequestMiddleware() gin.HandlerFunc {
 		wrapMaxBytes := func(body io.ReadCloser) io.ReadCloser {
 			return http.MaxBytesReader(c.Writer, body, maxBytes)
 		}
+		limitedOrigBody := wrapMaxBytes(origBody)
 		decompressed := false
 
 		switch c.GetHeader("Content-Encoding") {
 		case "gzip":
-			gzipReader, err := gzip.NewReader(origBody)
+			gzipReader, err := gzip.NewReader(limitedOrigBody)
 			if err != nil {
-				_ = origBody.Close()
+				_ = limitedOrigBody.Close()
 				c.AbortWithStatus(http.StatusBadRequest)
 				return
 			}
@@ -54,16 +55,16 @@ func DecompressRequestMiddleware() gin.HandlerFunc {
 				Reader: gzipReader,
 				closeFn: func() error {
 					_ = gzipReader.Close()
-					return origBody.Close()
+					return limitedOrigBody.Close()
 				},
 			})
 			decompressed = true
 		case "br":
-			reader := brotli.NewReader(origBody)
+			reader := brotli.NewReader(limitedOrigBody)
 			c.Request.Body = wrapMaxBytes(&readCloser{
 				Reader: reader,
 				closeFn: func() error {
-					return origBody.Close()
+					return limitedOrigBody.Close()
 				},
 			})
 			decompressed = true
@@ -74,13 +75,13 @@ func DecompressRequestMiddleware() gin.HandlerFunc {
 			// In streaming mode MaxMemory also caps the window at the request limit.
 			// Disable async decoding to avoid reading the body before downstream
 			// middleware (including authentication) decides to consume it.
-			reader, err := zstd.NewReader(origBody,
+			reader, err := zstd.NewReader(limitedOrigBody,
 				zstd.WithDecoderMaxWindow(8<<20),
 				zstd.WithDecoderMaxMemory(uint64(maxBytes)),
 				zstd.WithDecoderConcurrency(1),
 			)
 			if err != nil {
-				_ = origBody.Close()
+				_ = limitedOrigBody.Close()
 				c.AbortWithStatus(http.StatusBadRequest)
 				return
 			}
@@ -88,13 +89,13 @@ func DecompressRequestMiddleware() gin.HandlerFunc {
 				Reader: reader,
 				closeFn: func() error {
 					reader.Close()
-					return origBody.Close()
+					return limitedOrigBody.Close()
 				},
 			})
 			decompressed = true
 		default:
 			// Even for uncompressed bodies, enforce a max size to avoid huge request allocations.
-			c.Request.Body = wrapMaxBytes(origBody)
+			c.Request.Body = limitedOrigBody
 		}
 
 		if decompressed {

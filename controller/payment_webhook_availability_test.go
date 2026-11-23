@@ -14,13 +14,16 @@ import (
 
 	"github.com/Calcium-Ion/go-epay/epay"
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/waffo-com/waffo-go/core"
 )
 
 func confirmPaymentComplianceForTest(t *testing.T) {
@@ -505,4 +508,177 @@ func TestUpdateOptionValidatesEpaySignSettings(t *testing.T) {
 	assert.Equal(t, operation_setting.EpaySignTypeMD5, returned[signTypeKey])
 	assert.Equal(t, platformPublicKey, returned[publicKeyKey])
 	assert.NotContains(t, returned, privateKeyKey)
+}
+
+func TestEpayRejectsPartnerMismatchAndDisabledSubscriptionCallbacks(t *testing.T) {
+	setupEpayCallbackTest(t)
+	paymentSetting := operation_setting.GetPaymentSetting()
+	merchantPrivateKey, merchantPublicKey := newEpayRSAKeyPairForTest(t)
+	platformPrivateKey, platformPublicKey := newEpayRSAKeyPairForTest(t)
+	paymentSetting.EpaySignType = operation_setting.EpaySignTypeRSA
+	paymentSetting.EpayMerchantPrivateKey = merchantPrivateKey
+	paymentSetting.EpayPlatformPublicKey = platformPublicKey
+
+	// Another merchant on the same Epay platform signs with the genuine platform private key.
+	foreignPlatform, err := epay.NewClient(&epay.Config{
+		PartnerID:          "foreign_merchant_id",
+		SignType:           epay.SignTypeRSA,
+		MerchantPrivateKey: platformPrivateKey,
+		PlatformPublicKey:  merchantPublicKey,
+	}, "https://pay.example.com")
+	require.NoError(t, err)
+	foreignPending, err := foreignPlatform.SignParams(map[string]string{
+		"type": "alipay", "money": "1.00", "name": "item", "out_trade_no": "order", "trade_status": "WAIT_BUYER_PAY",
+	})
+	require.NoError(t, err)
+	assertEpayCallbacksVerifyBeforeSettlement(t, []epayCallbackCase{
+		{name: "foreign pid signed by platform key", params: foreignPending, validPending: false},
+	})
+
+	// Disabling Epay pay methods must also disable SubscriptionEpayNotify and SubscriptionEpayReturn.
+	operation_setting.PayMethods = nil
+	require.False(t, isEpayWebhookEnabled())
+	validPlatform, err := epay.NewClient(&epay.Config{
+		PartnerID:          "epay_id",
+		SignType:           epay.SignTypeRSA,
+		MerchantPrivateKey: platformPrivateKey,
+		PlatformPublicKey:  merchantPublicKey,
+	}, "https://pay.example.com")
+	require.NoError(t, err)
+	validPending, err := validPlatform.SignParams(map[string]string{
+		"type": "alipay", "money": "1.00", "name": "item", "out_trade_no": "order", "trade_status": "WAIT_BUYER_PAY",
+	})
+	require.NoError(t, err)
+	assertEpayCallbacksVerifyBeforeSettlement(t, []epayCallbackCase{
+		{name: "disabled epay rejects valid pending", params: validPending, validPending: false},
+	})
+}
+
+func TestWebhookAmountMerchantAndSetupSecurityGuards(t *testing.T) {
+	t.Run("Creem empty secret never bypasses signature even in test mode", func(t *testing.T) {
+		oldTestMode := setting.CreemTestMode
+		setting.CreemTestMode = true
+		t.Cleanup(func() { setting.CreemTestMode = oldTestMode })
+
+		assert.False(t, verifyCreemSignature(`{"eventType":"checkout.completed"}`, "forged", ""))
+	})
+
+	t.Run("Creem rejects test-mode event in production and underpaid orders", func(t *testing.T) {
+		oldTestMode := setting.CreemTestMode
+		setting.CreemTestMode = false
+		t.Cleanup(func() { setting.CreemTestMode = oldTestMode })
+
+		evt := &CreemWebhookEvent{}
+		evt.Object.Mode = "test"
+		evt.Object.Order.Currency = "USD"
+		evt.Object.Order.AmountPaid = 1000
+		require.Error(t, validateCreemWebhookOrder(evt, 10.0, ""))
+
+		evt.Object.Mode = "live"
+		evt.Object.Order.AmountPaid = 1
+		require.Error(t, validateCreemWebhookOrder(evt, 10.0, ""))
+
+		evt.Object.Order.AmountPaid = 1000
+		require.NoError(t, validateCreemWebhookOrder(evt, 10.0, ""))
+	})
+
+	t.Run("Waffo validates merchantId currency and orderAmount", func(t *testing.T) {
+		oldMerchant := setting.WaffoMerchantId
+		oldCurrency := setting.WaffoCurrency
+		setting.WaffoMerchantId = "M_EXPECTED"
+		setting.WaffoCurrency = "USD"
+		t.Cleanup(func() {
+			setting.WaffoMerchantId = oldMerchant
+			setting.WaffoCurrency = oldCurrency
+		})
+
+		topUp := &model.TopUp{Money: 19.99}
+		res := &core.PaymentNotificationResult{
+			MerchantOrderID:  "ORD-1",
+			PaymentRequestID: "ORD-1",
+			OrderCurrency:    "USD",
+			OrderAmount:      "19.99",
+			MerchantInfo:     map[string]any{"merchantId": "M_OTHER"},
+		}
+		_, err := validateWaffoPaymentNotification(res, topUp)
+		require.ErrorContains(t, err, "merchant id mismatch")
+
+		res.MerchantInfo["merchantId"] = "M_EXPECTED"
+		res.OrderAmount = "0.01"
+		_, err = validateWaffoPaymentNotification(res, topUp)
+		require.ErrorContains(t, err, "orderAmount mismatch")
+
+		res.OrderAmount = "19.99"
+		_, err = validateWaffoPaymentNotification(res, topUp)
+		require.NoError(t, err)
+	})
+
+	t.Run("Waffo Pancake binds webhook environment key and validates USD amount", func(t *testing.T) {
+		_, err := service.VerifyConfiguredWaffoPancakeWebhook(`{}`, "t=1,v1=bad", "unknown")
+		require.ErrorContains(t, err, "invalid Waffo Pancake webhook environment")
+
+		db := setupModelListControllerTestDB(t)
+		require.NoError(t, db.AutoMigrate(&model.TopUp{}))
+		require.NoError(t, db.Create(&model.TopUp{
+			UserId:          88,
+			Amount:          10,
+			Money:           25.00,
+			TradeNo:         "WAFFO_PANCAKE-88-1",
+			PaymentMethod:   model.PaymentMethodWaffoPancake,
+			PaymentProvider: model.PaymentProviderWaffoPancake,
+			Status:          common.TopUpStatusPending,
+		}).Error)
+
+		evt := &service.WaffoPancakeWebhookEvent{
+			Data: service.WaffoPancakeWebhookData{
+				OrderMerchantExternalID:       "WAFFO_PANCAKE-88-1",
+				MerchantProvidedBuyerIdentity: service.WaffoPancakeBuyerIdentityFromUserID(88),
+				Currency:                      "USD",
+				Amount:                        "0.01",
+			},
+		}
+		_, _, err = service.ResolveWaffoPancakeTradeNo(evt)
+		require.ErrorContains(t, err, "amount mismatch")
+
+		evt.Data.Amount = "27.50"
+		evt.Data.TaxAmount = "2.50"
+		tradeNo, base, err := service.ResolveWaffoPancakeTradeNo(evt)
+		require.NoError(t, err)
+		assert.Equal(t, "WAFFO_PANCAKE-88-1", tradeNo)
+		assert.Equal(t, "25.00", base.StringFixed(2))
+	})
+
+	t.Run("PostSetup rejects blank username and non-root stored key redirection", func(t *testing.T) {
+		db := setupModelListControllerTestDB(t)
+		require.NoError(t, db.AutoMigrate(&model.User{}, &model.Setup{}, &model.Option{}, &model.Channel{}))
+		oldSetup := constant.Setup
+		constant.Setup = false
+		t.Cleanup(func() { constant.Setup = oldSetup })
+
+		rec := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(rec)
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/api/setup", strings.NewReader(`{"username":"   ","password":"ValidPassword123!","confirmPassword":"ValidPassword123!"}`))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+		PostSetup(ctx)
+		assert.Contains(t, rec.Body.String(), "Invalid parameters")
+		assert.False(t, constant.Setup)
+
+		// Non-root admin cannot redirect a saved channel's stored key via FetchModels.
+		baseURL := "https://api.openai.com"
+		saved := &model.Channel{
+			Name:    "saved-adv",
+			Type:    constant.ChannelTypeAdvancedCustom,
+			Key:     "sk-secret-stored",
+			BaseURL: &baseURL,
+		}
+		require.NoError(t, db.Create(saved).Error)
+
+		fetchRec := httptest.NewRecorder()
+		fetchCtx, _ := gin.CreateTestContext(fetchRec)
+		fetchCtx.Set("role", common.RoleAdminUser)
+		fetchCtx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/fetch_models", strings.NewReader(`{"channel_id":1,"type":60,"base_url":"https://evil.example.com"}`))
+		fetchCtx.Request.Header.Set("Content-Type", "application/json")
+		FetchModels(fetchCtx)
+		assert.Equal(t, http.StatusForbidden, fetchRec.Code)
+	})
 }

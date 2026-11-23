@@ -53,7 +53,7 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 		common.ApiErrorT(c, "CreemProductId is not configured for this plan")
 		return
 	}
-	if setting.CreemWebhookSecret == "" && !setting.CreemTestMode {
+	if setting.CreemWebhookSecret == "" {
 		common.ApiErrorT(c, "Creem webhook is not configured")
 		return
 	}

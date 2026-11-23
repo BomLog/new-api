@@ -152,6 +152,50 @@ func TestSetUpLoggerNeverWritesTaskArtifactAccess(t *testing.T) {
 	assert.False(t, strings.Contains(output.String(), "never-log-this"))
 }
 
+func TestMidjourneyImageRouteRedactsAndVerifiesStaticCapability(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousSecret := common.CryptoSecret
+	common.CryptoSecret = "mj-image-artifact-secret"
+	t.Cleanup(func() { common.CryptoSecret = previousSecret })
+
+	access, err := service.IssueTaskArtifactAccess("mj-task-42", service.MidjourneyImageArtifactKey)
+	require.NoError(t, err)
+
+	router := gin.New()
+	router.Use(redactTaskArtifactAccessQuery())
+	router.GET(
+		"/mj/image/:id",
+		TokenOrTaskArtifactStaticAuth("id", service.MidjourneyImageArtifactKey),
+		func(c *gin.Context) {
+			assert.True(t, IsTaskArtifactAccess(c))
+			assert.NotContains(t, c.Request.URL.RawQuery, service.TaskArtifactAccessQueryParameter)
+			c.Status(http.StatusNoContent)
+		},
+	)
+	router.GET(
+		"/:mode/mj/image/:id",
+		TokenOrTaskArtifactStaticAuth("id", service.MidjourneyImageArtifactKey),
+		func(c *gin.Context) {
+			assert.True(t, IsTaskArtifactAccess(c))
+			c.Status(http.StatusNoContent)
+		},
+	)
+
+	for _, path := range []string{
+		"/mj/image/mj-task-42?access=" + urlQueryEscape(access),
+		"/fast/mj/image/mj-task-42?access=" + urlQueryEscape(access),
+	} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		assert.Equal(t, http.StatusNoContent, rec.Code)
+	}
+
+	// Capability for another task ID must be rejected with 404.
+	badRec := httptest.NewRecorder()
+	router.ServeHTTP(badRec, httptest.NewRequest(http.MethodGet, "/mj/image/other-task?access="+urlQueryEscape(access), nil))
+	assert.Equal(t, http.StatusNotFound, badRec.Code)
+}
+
 func urlQueryEscape(value string) string {
 	replacer := strings.NewReplacer("+", "%2B", "=", "%3D")
 	return replacer.Replace(value)

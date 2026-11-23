@@ -130,6 +130,10 @@ func tencentStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 
 	service.CloseResponseBodyGracefully(resp)
 
+	if responseText.Len() == 0 {
+		info.MarkEmptyResponse()
+		return &dto.Usage{}, nil
+	}
 	return service.ResponseText2Usage(c, responseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens()), nil
 }
 

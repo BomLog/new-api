@@ -6,16 +6,17 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
-	"io"
-	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -35,12 +36,8 @@ func generateCreemSignature(payload string, secret string) string {
 
 // 验证Creem webhook签名
 func verifyCreemSignature(payload string, signature string, secret string) bool {
-	if secret == "" {
+	if strings.TrimSpace(secret) == "" || strings.TrimSpace(signature) == "" {
 		logger.LogWarn(context.Background(), common.LogText("Creem webhook secret is not configured test_mode=%t signature=%q body=%q", setting.CreemTestMode, signature, payload))
-		if setting.CreemTestMode {
-			logger.LogInfo(context.Background(), common.LogText("Creem webhook signature check skipped reason=test_mode signature=%q body=%q", signature, payload))
-			return true
-		}
 		return false
 	}
 
@@ -77,7 +74,7 @@ func (*CreemAdaptor) RequestPay(c *gin.Context, req *CreemPayRequest) {
 
 	// 解析产品列表
 	var products []CreemProduct
-	err := json.Unmarshal([]byte(setting.CreemProducts), &products)
+	err := common.Unmarshal([]byte(setting.CreemProducts), &products)
 	if err != nil {
 		logger.LogError(c.Request.Context(), common.LogText("Creem failed to parse product config user_id=%d error=%q", c.GetInt("id"), err.Error()))
 		paymentError(c, common.NewMessage("Product configuration error"))
@@ -291,6 +288,34 @@ func CreemWebhook(c *gin.Context) {
 	}
 }
 
+func validateCreemWebhookOrder(event *CreemWebhookEvent, expectedMoney float64, expectedProductID string) error {
+	if event == nil {
+		return errors.New("missing creem event")
+	}
+	if !setting.CreemTestMode && (strings.EqualFold(strings.TrimSpace(event.Object.Mode), "test") || strings.EqualFold(strings.TrimSpace(event.Object.Order.Mode), "test")) {
+		return errors.New("test webhook rejected while CreemTestMode is disabled")
+	}
+	if expectedProductID != "" && event.Object.Product.Id != "" && event.Object.Product.Id != expectedProductID {
+		return errors.New("creem product mismatch")
+	}
+	if expectedMoney > 0 {
+		currency := strings.ToUpper(strings.TrimSpace(event.Object.Order.Currency))
+		scale := int64(100)
+		if zeroDecimalCurrencies[currency] {
+			scale = 1
+		}
+		expectedMinor := decimal.NewFromFloat(expectedMoney).Mul(decimal.NewFromInt(scale)).Round(0).IntPart()
+		paidMinor := int64(event.Object.Order.AmountPaid)
+		if paidMinor == 0 && event.Object.Order.Amount > 0 {
+			paidMinor = int64(event.Object.Order.Amount)
+		}
+		if paidMinor < expectedMinor {
+			return errors.New("creem paid amount below order amount")
+		}
+	}
+	return nil
+}
+
 // 处理支付完成事件
 func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
 	// 验证订单状态
@@ -311,13 +336,23 @@ func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
 	// Try complete subscription order first
 	LockOrder(referenceId)
 	defer UnlockOrder(referenceId)
-	if err := model.CompleteSubscriptionOrder(referenceId, common.GetJsonString(event), model.PaymentProviderCreem, ""); err == nil {
+	if subOrder := model.GetSubscriptionOrderByTradeNo(referenceId); subOrder != nil {
+		expectedProductID := ""
+		if plan, planErr := model.GetSubscriptionPlanById(subOrder.PlanId); planErr == nil && plan != nil {
+			expectedProductID = strings.TrimSpace(plan.CreemProductId)
+		}
+		if valErr := validateCreemWebhookOrder(event, subOrder.Money, expectedProductID); valErr != nil {
+			logger.LogWarn(c.Request.Context(), common.LogText("Creem subscription callback validation failed trade_no=%s creem_order_id=%s error=%q", referenceId, event.Object.Order.Id, valErr.Error()))
+			c.AbortWithStatus(http.StatusBadRequest)
+			return
+		}
+		if err := model.CompleteSubscriptionOrder(referenceId, common.GetJsonString(event), model.PaymentProviderCreem, ""); err != nil {
+			logger.LogError(c.Request.Context(), common.LogText("Creem subscription order processing failed trade_no=%s creem_order_id=%s error=%q", referenceId, event.Object.Order.Id, err.Error()))
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
 		logger.LogInfo(c.Request.Context(), common.LogText("Creem subscription order processed trade_no=%s creem_order_id=%s", referenceId, event.Object.Order.Id))
 		c.Status(http.StatusOK)
-		return
-	} else if err != nil && !errors.Is(err, model.ErrSubscriptionOrderNotFound) {
-		logger.LogError(c.Request.Context(), common.LogText("Creem subscription order processing failed trade_no=%s creem_order_id=%s error=%q", referenceId, event.Object.Order.Id, err.Error()))
-		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 
@@ -334,6 +369,11 @@ func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
 	topUp := model.GetTopUpByTradeNo(referenceId)
 	if topUp == nil {
 		logger.LogWarn(c.Request.Context(), common.LogText("Creem top-up order not found trade_no=%s creem_order_id=%s", referenceId, event.Object.Order.Id))
+		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+	if valErr := validateCreemWebhookOrder(event, topUp.Money, ""); valErr != nil {
+		logger.LogWarn(c.Request.Context(), common.LogText("Creem callback validation failed trade_no=%s creem_order_id=%s error=%q", referenceId, event.Object.Order.Id, valErr.Error()))
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
@@ -411,7 +451,7 @@ func genCreemLink(ctx context.Context, referenceId string, product *CreemProduct
 	}
 
 	// 序列化请求数据
-	jsonData, err := json.Marshal(requestData)
+	jsonData, err := common.Marshal(requestData)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal request data: %v", err)
 	}
@@ -452,7 +492,7 @@ func genCreemLink(ctx context.Context, referenceId string, product *CreemProduct
 	}
 	// 解析响应
 	var checkoutResp CreemCheckoutResponse
-	err = json.Unmarshal(body, &checkoutResp)
+	err = common.Unmarshal(body, &checkoutResp)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse response: %v", err)
 	}

@@ -201,3 +201,21 @@ func TestStripeCreditedQuotaIncludesGroupRatio(t *testing.T) {
 	require.NoError(t, common.UpdateTopupGroupRatioByJSONString(`{"free":0}`))
 	assert.True(t, decimal.NewFromInt(500000).Equal(getStripeCreditedQuota(1, "free")))
 }
+
+func TestStripeTokensDisplayModeNormalizesUnits(t *testing.T) {
+	oldQuotaPerUnit := common.QuotaPerUnit
+	oldDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+	oldTopupGroupRatio := common.TopupGroupRatio2JSONString()
+	common.QuotaPerUnit = 500000
+	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeTokens
+	require.NoError(t, common.UpdateTopupGroupRatioByJSONString(`{"default":1}`))
+	t.Cleanup(func() {
+		common.QuotaPerUnit = oldQuotaPerUnit
+		operation_setting.GetGeneralSetting().QuotaDisplayType = oldDisplayType
+		require.NoError(t, common.UpdateTopupGroupRatioByJSONString(oldTopupGroupRatio))
+	})
+
+	assert.Equal(t, int64(2), normalizeStripeTopUpUnits(1_000_000))
+	assert.Equal(t, int64(10000*500000), getStripeMaxTopup())
+	assert.True(t, decimal.NewFromInt(1_000_000).Equal(getStripeCreditedQuota(1_000_000, "default")))
+}

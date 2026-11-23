@@ -256,10 +256,22 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		}
 	})
 	helper.Done(c)
-	if usage.TotalTokens == 0 {
-		usage = service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+	hasStreamOutput := responseText != "" || nodeToken > 0 || usage.CompletionTokens > 0
+	upstreamStreamFailed := info != nil && info.StreamStatus != nil && info.StreamStatus.UpstreamFailed()
+	if !hasStreamOutput && upstreamStreamFailed {
+		usage = &dto.Usage{}
+		info.MarkEmptyResponse()
+	} else if usage.TotalTokens == 0 {
+		if hasStreamOutput {
+			usage = service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+		} else {
+			usage = &dto.Usage{}
+			info.MarkEmptyResponse()
+		}
 	}
-	usage.CompletionTokens += nodeToken
+	if hasStreamOutput {
+		usage.CompletionTokens += nodeToken
+	}
 	return usage, nil
 }
 

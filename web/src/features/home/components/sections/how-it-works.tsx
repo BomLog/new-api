@@ -16,78 +16,164 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Settings, Zap, BarChart3 } from 'lucide-react'
+import { BarChart3, Settings, Zap } from 'lucide-react'
+import { motion } from 'motion/react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { AnimateInView } from '@/components/animate-in-view'
+import { MOTION_TRANSITION } from '@/lib/motion'
+import { cn } from '@/lib/utils'
 
-export function HowItWorks() {
+import { BoomEmblem, BoomShockwaveBurst } from '../boom-brand-mark'
+
+interface HowItWorksProps {
+  className?: string
+}
+
+export function HowItWorks(props: HowItWorksProps) {
   const { t } = useTranslation()
+  const [activeStep, setActiveStep] = useState<number>(0)
+  const [burstTick, setBurstTick] = useState<number>(0)
+  const [isHovered, setIsHovered] = useState<boolean>(false)
 
   const steps = [
     {
-      num: '1',
+      num: '01',
       title: t('Configure'),
       desc: t(
         'Add your API keys, set up channels and configure access permissions'
       ),
-      icon: <Settings className='size-6' strokeWidth={1.5} />,
+      icon: Settings,
     },
     {
-      num: '2',
+      num: '02',
       title: t('Connect'),
       desc: t(
         'Connect through OpenAI, Claude, Gemini, and other compatible API routes'
       ),
-      icon: <Zap className='size-6' strokeWidth={1.5} />,
+      icon: Zap,
     },
     {
-      num: '3',
+      num: '03',
       title: t('Monitor'),
       desc: t('Track usage, costs and performance with real-time analytics'),
-      icon: <BarChart3 className='size-6' strokeWidth={1.5} />,
+      icon: BarChart3,
     },
   ]
 
+  useEffect(() => {
+    if (isHovered) return
+
+    const timer = window.setInterval(() => {
+      setActiveStep((prev) => (prev + 1) % 3)
+      setBurstTick((prev) => prev + 1)
+    }, 2800)
+
+    return () => window.clearInterval(timer)
+  }, [isHovered])
+
   return (
-    <section className='relative z-10 px-6 py-24 md:py-32'>
+    <section
+      className={cn(
+        'border-t border-white/10 px-6 py-16 md:py-24',
+        props.className
+      )}
+    >
       <div className='mx-auto max-w-6xl'>
-        <AnimateInView className='mb-16 text-center md:mb-20'>
-          <p className='mb-3 font-mono text-xs font-medium tracking-widest text-sky-300 uppercase'>
-            {t('How It Works')}
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, amount: 0.4 }}
+          transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+          className='mb-10 max-w-xl'
+        >
+          <p className='mb-2 flex items-center gap-2 text-xs font-medium tracking-wider text-slate-400 uppercase'>
+            <BoomEmblem className='size-3.5' spinning />
+            <span>{t('How It Works')}</span>
           </p>
-          <h2 className='text-2xl font-bold tracking-tight md:text-3xl'>
+          <h2 className='text-2xl leading-tight font-semibold tracking-tight text-white md:text-3xl'>
             {t('Three steps to get started')}
           </h2>
-        </AnimateInView>
+        </motion.div>
 
-        <div className='relative grid gap-8 md:grid-cols-3 md:gap-12'>
-          <div
-            aria-hidden
-            className='absolute top-8 right-[16%] left-[16%] hidden h-px bg-gradient-to-r from-sky-400/0 via-sky-300/50 to-violet-400/0 md:block'
-          />
-          {steps.map((step, i) => (
-            <AnimateInView
-              key={step.num}
-              delay={i * 150}
-              animation='fade-up'
-              className='relative flex flex-col items-center text-center'
-            >
-              <div className='relative mb-6'>
-                <div className='space-panel flex size-16 items-center justify-center text-sky-200'>
-                  {step.icon}
+        <ol
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
+          className='grid grid-cols-1 gap-6 md:grid-cols-3 md:gap-8'
+        >
+          {steps.map((step, idx) => {
+            const Icon = step.icon
+            const isActive = activeStep === idx
+            return (
+              <motion.li
+                key={step.num}
+                onMouseEnter={() => {
+                  setActiveStep(idx)
+                  setBurstTick((prev) => prev + 1)
+                }}
+                initial={{ opacity: 0, y: 14 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true, amount: 0.3 }}
+                transition={{
+                  duration: 0.45,
+                  delay: idx * 0.08,
+                  ease: [0.22, 1, 0.36, 1],
+                }}
+                className={cn(
+                  'relative flex flex-col rounded-xl border p-6 transition-all duration-300',
+                  isActive
+                    ? 'border-orange-400/50 bg-[#0d1224]/95 shadow-[0_18px_48px_-20px_rgba(249,115,22,0.38)]'
+                    : 'border-white/10 bg-[#080b16]/80 hover:border-white/20'
+                )}
+              >
+                {/* Animated supernova plasma progress beam */}
+                <div
+                  aria-hidden='true'
+                  className='relative mb-5 h-0.5 w-full overflow-hidden rounded-full bg-white/10'
+                >
+                  {isActive && (
+                    <motion.div
+                      layoutId='how-it-works-active-beam'
+                      transition={MOTION_TRANSITION.spring}
+                      className='absolute inset-0 rounded-full bg-linear-to-r from-amber-300 via-rose-500 to-sky-400'
+                    />
+                  )}
                 </div>
-                <div className='absolute -top-2 -right-2 flex size-6 items-center justify-center rounded-full bg-gradient-to-br from-sky-300 to-violet-400 font-mono text-xs font-bold text-slate-950'>
-                  {step.num}
+
+                <div className='flex items-center justify-between'>
+                  <span
+                    className={cn(
+                      'font-mono text-xs font-bold transition-colors duration-300',
+                      isActive ? 'text-amber-300' : 'text-slate-500'
+                    )}
+                  >
+                    {step.num}
+                  </span>
+                  <div
+                    className={cn(
+                      'relative flex size-8 items-center justify-center rounded-lg border transition-colors duration-300',
+                      isActive
+                        ? 'border-orange-400/50 bg-orange-500/15 text-amber-200'
+                        : 'border-white/10 bg-white/[0.04] text-slate-400'
+                    )}
+                  >
+                    {isActive && (
+                      <BoomShockwaveBurst burstKey={burstTick} size='sm' />
+                    )}
+                    <Icon aria-hidden='true' className='size-4' />
+                  </div>
                 </div>
-              </div>
-              <h3 className='mb-2 text-base font-semibold'>{step.title}</h3>
-              <p className='text-muted-foreground max-w-[240px] text-sm leading-relaxed'>
-                {step.desc}
-              </p>
-            </AnimateInView>
-          ))}
-        </div>
+
+                <h3 className='mt-3 text-base font-semibold text-white'>
+                  {step.title}
+                </h3>
+                <p className='mt-1.5 text-sm leading-relaxed text-slate-400'>
+                  {step.desc}
+                </p>
+              </motion.li>
+            )
+          })}
+        </ol>
       </div>
     </section>
   )

@@ -168,8 +168,12 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			return false
 		}
 	})
-	if usage.PromptTokens == 0 {
-		usage = service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+	if usage.PromptTokens == 0 && usage.CompletionTokens == 0 {
+		if responseText != "" {
+			usage = service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+		} else {
+			info.MarkEmptyResponse()
+		}
 	}
 	return usage, nil
 }

@@ -18,11 +18,20 @@ For commercial licensing, please contact support@quantumnous.com
 */
 export function isHttpUrl(value: string): boolean {
   try {
-    const url = new URL(value)
+    const url = new URL(value.trim())
     return url.protocol === 'http:' || url.protocol === 'https:'
   } catch {
     return false
   }
+}
+
+export function openExternalHttpUrl(value: string): boolean {
+  const trimmed = value.trim()
+  if (!isHttpUrl(trimmed)) {
+    return false
+  }
+  window.open(trimmed, '_blank', 'noopener,noreferrer')
+  return true
 }
 
 export function isLikelyHtml(value: string): boolean {

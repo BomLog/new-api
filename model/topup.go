@@ -44,6 +44,7 @@ const (
 
 var (
 	ErrPaymentMethodMismatch = errors.New("payment method mismatch")
+	ErrPaymentAmountMismatch = errors.New("payment amount mismatch")
 	ErrTopUpNotFound         = errors.New("topup not found")
 	ErrTopUpStatusInvalid    = errors.New("topup status invalid")
 	// The quota errors reach the web console, so they carry message keys.
@@ -175,6 +176,14 @@ func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, ta
 // alreadyDone=true 表示订单此前已完成，本次为幂等重复回调。
 // 进程内的 LockOrder 只是优化，正确性由本函数的数据库行锁保证。
 func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (alreadyDone bool, err error) {
+	return rechargeEpay(tradeNo, actualPaymentMethod, nil, callerIp)
+}
+
+func RechargeEpayWithAmount(tradeNo string, actualPaymentMethod string, paidMoney decimal.Decimal, callerIp string) (alreadyDone bool, err error) {
+	return rechargeEpay(tradeNo, actualPaymentMethod, &paidMoney, callerIp)
+}
+
+func rechargeEpay(tradeNo string, actualPaymentMethod string, paidMoney *decimal.Decimal, callerIp string) (alreadyDone bool, err error) {
 	if tradeNo == "" {
 		return false, errors.New("payment order number not provided")
 	}
@@ -192,6 +201,12 @@ func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (
 		}
 		if topUp.PaymentProvider != PaymentProviderEpay {
 			return ErrPaymentMethodMismatch
+		}
+		if paidMoney != nil {
+			expectedMoney := decimal.NewFromFloat(topUp.Money).Round(2)
+			if !paidMoney.Round(2).Equal(expectedMoney) {
+				return ErrPaymentAmountMismatch
+			}
 		}
 		if topUp.Status == common.TopUpStatusSuccess {
 			alreadyDone = true
@@ -218,7 +233,10 @@ func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (
 		return creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil)
 	})
 	if err != nil {
-		if !errors.Is(err, ErrTopUpNotFound) && !errors.Is(err, ErrPaymentMethodMismatch) && !errors.Is(err, ErrTopUpStatusInvalid) {
+		if !errors.Is(err, ErrTopUpNotFound) &&
+			!errors.Is(err, ErrPaymentMethodMismatch) &&
+			!errors.Is(err, ErrPaymentAmountMismatch) &&
+			!errors.Is(err, ErrTopUpStatusInvalid) {
 			common.SysError(common.LogText("epay topup failed: %s", err.Error()))
 		}
 		return false, err
@@ -562,25 +580,9 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 			return ErrInvalidTopUpQuota
 		}
 
-		// 构建更新字段，优先使用邮箱，如果邮箱为空则使用用户名
-		updateFields := map[string]any{}
-
-		// 如果有客户邮箱，尝试更新用户邮箱（仅当用户邮箱为空时）
-		if customerEmail != "" {
-			// 先检查用户当前邮箱是否为空
-			var user User
-			err = tx.Where("id = ?", topUp.UserId).First(&user).Error
-			if err != nil {
-				return err
-			}
-
-			// 如果用户邮箱为空，则更新为支付时使用的邮箱
-			if user.Email == "" {
-				updateFields["email"] = customerEmail
-			}
-		}
-
-		return creditTopUpQuota(tx, topUp.UserId, quota, updateFields)
+		// 不在支付回调中将未经邮箱验证码验证的第三方结账邮箱写入 users.email，
+		// 避免绕过邮箱唯一性与所有权校验。
+		return creditTopUpQuota(tx, topUp.UserId, quota, nil)
 	})
 
 	if err != nil {
@@ -595,6 +597,14 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 }
 
 func RechargeWaffo(tradeNo string, callerIp string) (err error) {
+	return rechargeWaffo(tradeNo, nil, callerIp)
+}
+
+func RechargeWaffoWithAmount(tradeNo string, paidMoney decimal.Decimal, callerIp string) (err error) {
+	return rechargeWaffo(tradeNo, &paidMoney, callerIp)
+}
+
+func rechargeWaffo(tradeNo string, paidMoney *decimal.Decimal, callerIp string) (err error) {
 	if tradeNo == "" {
 		return errors.New("payment order number not provided")
 	}
@@ -610,11 +620,18 @@ func RechargeWaffo(tradeNo string, callerIp string) (err error) {
 	err = DB.Transaction(func(tx *gorm.DB) error {
 		err := lockForUpdate(tx).Where(refCol+" = ?", tradeNo).First(topUp).Error
 		if err != nil {
-			return errors.New("top-up order not found")
+			return ErrTopUpNotFound
 		}
 
 		if topUp.PaymentProvider != PaymentProviderWaffo {
 			return ErrPaymentMethodMismatch
+		}
+
+		if paidMoney != nil {
+			expectedMoney := decimal.NewFromFloat(topUp.Money).Round(2)
+			if !paidMoney.Round(2).Equal(expectedMoney) {
+				return ErrPaymentAmountMismatch
+			}
 		}
 
 		if topUp.Status == common.TopUpStatusSuccess {
@@ -622,7 +639,7 @@ func RechargeWaffo(tradeNo string, callerIp string) (err error) {
 		}
 
 		if topUp.Status != common.TopUpStatusPending {
-			return errors.New("invalid top-up order status")
+			return ErrTopUpStatusInvalid
 		}
 
 		quotaToAdd, err = common.WalletQuotaFromDecimalStrict(
@@ -655,6 +672,14 @@ func RechargeWaffo(tradeNo string, callerIp string) (err error) {
 }
 
 func RechargeWaffoPancake(tradeNo string) (err error) {
+	return rechargeWaffoPancake(tradeNo, nil)
+}
+
+func RechargeWaffoPancakeWithAmount(tradeNo string, expectedBaseMoney decimal.Decimal) (err error) {
+	return rechargeWaffoPancake(tradeNo, &expectedBaseMoney)
+}
+
+func rechargeWaffoPancake(tradeNo string, expectedBaseMoney *decimal.Decimal) (err error) {
 	if tradeNo == "" {
 		return errors.New("payment order number not provided")
 	}
@@ -670,11 +695,18 @@ func RechargeWaffoPancake(tradeNo string) (err error) {
 	err = DB.Transaction(func(tx *gorm.DB) error {
 		err := lockForUpdate(tx).Where(refCol+" = ?", tradeNo).First(topUp).Error
 		if err != nil {
-			return errors.New("top-up order not found")
+			return ErrTopUpNotFound
 		}
 
 		if topUp.PaymentProvider != PaymentProviderWaffoPancake {
 			return ErrPaymentMethodMismatch
+		}
+
+		if expectedBaseMoney != nil {
+			expectedMoney := decimal.NewFromFloat(topUp.Money).Round(2)
+			if !expectedBaseMoney.Round(2).Equal(expectedMoney) {
+				return ErrPaymentAmountMismatch
+			}
 		}
 
 		if topUp.Status == common.TopUpStatusSuccess {
@@ -682,7 +714,7 @@ func RechargeWaffoPancake(tradeNo string) (err error) {
 		}
 
 		if topUp.Status != common.TopUpStatusPending {
-			return errors.New("invalid top-up order status")
+			return ErrTopUpStatusInvalid
 		}
 
 		quotaToAdd, err = common.WalletQuotaFromDecimalStrict(

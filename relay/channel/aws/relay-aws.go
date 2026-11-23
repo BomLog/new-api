@@ -275,6 +275,9 @@ func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (
 	stream := awsResp.GetStream()
 	defer stream.Close()
 
+	info.StreamStatus = relaycommon.NewStreamStatus()
+	info.StreamStatus.RequireTerminal()
+
 	claudeInfo := &claude.ClaudeResponseInfo{
 		ResponseId:   helper.GetResponseID(c),
 		Created:      common.GetTimestamp(),
@@ -312,6 +315,20 @@ streamLoop:
 				return types.NewError(errors.New("nil or unknown response type"), types.ErrorCodeInvalidRequest), nil
 			}
 		}
+	}
+
+	if requestContext.Err() != nil {
+		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, requestContext.Err())
+	} else if streamErr := stream.Err(); streamErr != nil {
+		if errors.Is(streamErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, streamErr)
+		} else {
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, streamErr)
+		}
+	} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, ctx.Err())
+	} else {
+		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
 	}
 
 	_ = stream.Close()

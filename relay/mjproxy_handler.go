@@ -2,10 +2,13 @@ package relay
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -26,27 +29,94 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+var allowedMidjourneyImageMIMETypes = []string{
+	"image/jpeg",
+	"image/png",
+	"image/webp",
+	"image/gif",
+	"image/avif",
+	"image/bmp",
+}
+
+func resolveSafeMidjourneyImageContentType(headerValue string, sample []byte) (string, bool) {
+	candidates := []string{headerValue}
+	if len(sample) > 0 {
+		candidates = append(candidates, http.DetectContentType(sample))
+	}
+	for _, raw := range candidates {
+		mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(raw))
+		if err != nil {
+			continue
+		}
+		normalized := strings.ToLower(strings.TrimSpace(mediaType))
+		if normalized == "image/jpg" {
+			normalized = "image/jpeg"
+		}
+		if slices.Contains(allowedMidjourneyImageMIMETypes, normalized) {
+			return normalized, true
+		}
+	}
+	return "", false
+}
+
+func validateMidjourneyProxyFetchURL(rawURL string) error {
+	fetchSetting := system_setting.GetFetchSetting()
+	return common.ValidateURLWithFetchSetting(
+		rawURL,
+		fetchSetting.EnableSSRFProtection,
+		fetchSetting.AllowPrivateIp,
+		fetchSetting.DomainFilterMode,
+		fetchSetting.IpFilterMode,
+		fetchSetting.DomainList,
+		fetchSetting.IpList,
+		fetchSetting.AllowedPorts,
+		fetchSetting.ApplyIPFilterForDomain,
+	)
+}
+
 func RelayMidjourneyImage(c *gin.Context) {
 	taskId := c.Param("id")
 	midjourneyTask := model.GetByOnlyMJId(taskId)
 	if midjourneyTask == nil {
-		c.JSON(400, gin.H{
+		c.JSON(http.StatusNotFound, gin.H{
 			"error": "midjourney_task_not_found",
 		})
 		return
 	}
+	if !c.GetBool(service.TaskArtifactAccessContextKey) && midjourneyTask.UserId != c.GetInt("id") {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "midjourney_task_not_found",
+		})
+		return
+	}
+	if strings.TrimSpace(midjourneyTask.ImageUrl) == "" {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "midjourney_image_not_found",
+		})
+		return
+	}
+
 	var httpClient *http.Client
 	var proxy string
 	if channel, err := model.CacheGetChannel(midjourneyTask.ChannelId); err == nil {
 		channelSetting := channel.GetSetting()
 		proxy = channelSetting.Proxy
 		if proxy != "" {
-			if httpClient, err = service.GetHttpClientWithProxySettings(proxy, channelSetting); err != nil {
-				c.JSON(400, gin.H{
+			baseClient, proxyErr := service.GetHttpClientWithProxySettings(proxy, channelSetting)
+			if proxyErr != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
 					"error": "proxy_url_invalid",
 				})
 				return
 			}
+			copied := *baseClient
+			copied.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return fmt.Errorf("stopped after 10 redirects")
+				}
+				return validateMidjourneyProxyFetchURL(req.URL.String())
+			}
+			httpClient = &copied
 		}
 	}
 	if httpClient == nil {
@@ -57,45 +127,79 @@ func RelayMidjourneyImage(c *gin.Context) {
 		validateErr = service.ValidateSSRFProtectedFetchURL(midjourneyTask.ImageUrl)
 	} else {
 		// 渠道代理路径的连接由代理侧建立，无法做拨号时逐 IP 校验，
-		// 因此保留请求前的一次性 SSRF 校验。
-		fetchSetting := system_setting.GetFetchSetting()
-		validateErr = common.ValidateURLWithFetchSetting(midjourneyTask.ImageUrl, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain)
+		// 因此保留请求前及每次重定向的 SSRF 校验。
+		validateErr = validateMidjourneyProxyFetchURL(midjourneyTask.ImageUrl)
 	}
 	if validateErr != nil {
 		c.JSON(http.StatusForbidden, gin.H{
-			"error": fmt.Sprintf("request blocked: %v", validateErr),
+			"error": "request_blocked",
 		})
 		return
 	}
-	resp, err := httpClient.Get(midjourneyTask.ImageUrl)
+
+	reqCtx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
+	defer cancel()
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodGet, midjourneyTask.ImageUrl, nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid_image_url",
+		})
+		return
+	}
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{
 			"error": "http_get_image_failed",
 		})
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		responseBody, _ := io.ReadAll(resp.Body)
-		c.JSON(resp.StatusCode, gin.H{
-			"error": string(responseBody),
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": "upstream_image_fetch_failed",
 		})
 		return
 	}
-	// 从Content-Type头获取MIME类型
-	contentType := resp.Header.Get("Content-Type")
-	if contentType == "" {
-		// 如果无法确定内容类型，则默认为jpeg
-		contentType = "image/jpeg"
+
+	maxMB := constant.MaxFileDownloadMB
+	if maxMB <= 0 {
+		maxMB = 64
 	}
-	// 设置响应的内容类型
-	c.Writer.Header().Set("Content-Type", contentType)
-	// 将图片流式传输到响应体
-	_, err = io.Copy(c.Writer, resp.Body)
+	maxBytes := int64(maxMB) << 20
+	limitedBody := io.LimitReader(resp.Body, maxBytes)
+
+	var sniffBuf [512]byte
+	sniffN, sniffErr := io.ReadFull(limitedBody, sniffBuf[:])
+	if sniffErr != nil && sniffErr != io.EOF && sniffErr != io.ErrUnexpectedEOF {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": "http_read_image_failed",
+		})
+		return
+	}
+	contentType, ok := resolveSafeMidjourneyImageContentType(resp.Header.Get("Content-Type"), sniffBuf[:sniffN])
+	if !ok {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": "unsupported_image_content_type",
+		})
+		return
+	}
+
+	c.Header("Content-Type", contentType)
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("Content-Security-Policy", "sandbox; default-src 'none'; img-src 'self'")
+	c.Header("Referrer-Policy", "no-referrer")
+	c.Header("Cache-Control", "private, no-store")
+	if sniffN > 0 {
+		if _, err = c.Writer.Write(sniffBuf[:sniffN]); err != nil {
+			log.Println(common.LogText("Failed to stream image: %v", err))
+			return
+		}
+	}
+	_, err = io.Copy(c.Writer, limitedBody)
 	if err != nil {
 		log.Println(common.LogText("Failed to stream image: %v", err))
 	}
-	return
 }
 
 func RelayMidjourneyNotify(c *gin.Context) *dto.MidjourneyResponse {
@@ -151,10 +255,11 @@ func coverMidjourneyTaskDto(c *gin.Context, originTask *model.Midjourney) (midjo
 	midjourneyTask.FinishTime = originTask.FinishTime
 	midjourneyTask.ImageUrl = ""
 	if originTask.ImageUrl != "" && setting.MjForwardUrlEnabled {
-		midjourneyTask.ImageUrl = system_setting.ServerAddress + "/mj/image/" + originTask.MjId
+		randSuffix := ""
 		if originTask.Status != "SUCCESS" {
-			midjourneyTask.ImageUrl += "?rand=" + strconv.FormatInt(time.Now().UnixNano(), 10)
+			randSuffix = strconv.FormatInt(time.Now().UnixNano(), 10)
 		}
+		midjourneyTask.ImageUrl = service.BuildMidjourneyImageProxyURL(originTask.MjId, randSuffix)
 	} else {
 		midjourneyTask.ImageUrl = originTask.ImageUrl
 	}
@@ -443,7 +548,10 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		midjRequest.Action = constant.MjActionBlend
 	} else if relayInfo.RelayMode == relayconstant.RelayModeMidjourneyUpload { //绘画任务，此类任务可重复
 		midjRequest.Action = constant.MjActionUpload
-	} else if midjRequest.TaskId != "" { //放大、变换任务，此类任务，如果重复且已有结果，远端api会直接返回最终结果
+	} else if relayInfo.RelayMode == relayconstant.RelayModeMidjourneyChange ||
+		relayInfo.RelayMode == relayconstant.RelayModeMidjourneySimpleChange ||
+		relayInfo.RelayMode == relayconstant.RelayModeMidjourneyModal ||
+		relayInfo.RelayMode == relayconstant.RelayModeMidjourneyVideo { //放大、变换任务，必须绑定用户已存在的原任务
 		mjId := ""
 		if relayInfo.RelayMode == relayconstant.RelayModeMidjourneyChange {
 			if midjRequest.TaskId == "" {
@@ -453,32 +561,46 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 			} else if midjRequest.Index == 0 {
 				return service.MidjourneyErrorWrapper(constant.MjRequestError, "index_is_required")
 			}
-			//action = midjRequest.Action
+			allowedChangeActions := []string{
+				constant.MjActionUpscale,
+				constant.MjActionVariation,
+				constant.MjActionReRoll,
+				constant.MjActionLowVariation,
+				constant.MjActionHighVariation,
+				constant.MjActionPan,
+				constant.MjActionZoom,
+				constant.MjActionCustomZoom,
+				constant.MjActionInPaint,
+			}
+			if !slices.Contains(allowedChangeActions, midjRequest.Action) {
+				return service.MidjourneyErrorWrapper(constant.MjRequestError, "invalid_action")
+			}
 			mjId = midjRequest.TaskId
 		} else if relayInfo.RelayMode == relayconstant.RelayModeMidjourneySimpleChange {
 			if midjRequest.Content == "" {
 				return service.MidjourneyErrorWrapper(constant.MjRequestError, "content_is_required")
 			}
 			params := service.ConvertSimpleChangeParams(midjRequest.Content)
-			if params == nil {
+			if params == nil || strings.TrimSpace(params.TaskId) == "" {
 				return service.MidjourneyErrorWrapper(constant.MjRequestError, "content_parse_failed")
 			}
 			mjId = params.TaskId
 			midjRequest.Action = params.Action
 		} else if relayInfo.RelayMode == relayconstant.RelayModeMidjourneyModal {
-			//if midjRequest.MaskBase64 == "" {
-			//	return service.MidjourneyErrorWrapper(constant.MjRequestError, "mask_base64_is_required")
-			//}
+			if strings.TrimSpace(midjRequest.TaskId) == "" {
+				return service.MidjourneyErrorWrapper(constant.MjRequestError, "task_id_is_required")
+			}
 			mjId = midjRequest.TaskId
 			midjRequest.Action = constant.MjActionModal
 		} else if relayInfo.RelayMode == relayconstant.RelayModeMidjourneyVideo {
 			midjRequest.Action = constant.MjActionVideo
-			if midjRequest.TaskId == "" {
+			if strings.TrimSpace(midjRequest.TaskId) == "" {
 				return service.MidjourneyErrorWrapper(constant.MjRequestError, "task_id_is_required")
-			} else if midjRequest.Action == "" {
-				return service.MidjourneyErrorWrapper(constant.MjRequestError, "action_is_required")
 			}
 			mjId = midjRequest.TaskId
+		}
+		if strings.TrimSpace(mjId) == "" {
+			return service.MidjourneyErrorWrapper(constant.MjRequestError, "task_id_is_required")
 		}
 
 		originTask := model.GetByMJId(relayInfo.UserId, mjId)
@@ -510,6 +632,8 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		//	// 普通版渠道
 		//
 		//}
+	} else {
+		return service.MidjourneyErrorWrapper(constant.MjRequestError, "unknown_relay_action")
 	}
 
 	if midjRequest.Action == constant.MjActionInPaint || midjRequest.Action == constant.MjActionCustomZoom {

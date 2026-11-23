@@ -108,6 +108,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeResponse.Type == "message_stop" {
 		info.StreamStatus.MarkCompleted()
 	}
+	observeClaudeStreamOutput(info, &claudeResponse)
 	if info.RelayFormat == types.RelayFormatClaude {
 		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
 
@@ -272,35 +273,110 @@ func recordClaudeServerToolUse(info *relaycommon.RelayInfo, serverToolUse *dto.C
 	}
 }
 
+func observeClaudeStreamOutput(info *relaycommon.RelayInfo, claudeResponse *dto.ClaudeResponse) {
+	if info == nil || claudeResponse == nil {
+		return
+	}
+	switch claudeResponse.Type {
+	case "content_block_start":
+		if block := claudeResponse.ContentBlock; block != nil {
+			switch block.Type {
+			case "tool_use", "server_tool_use", "mcp_tool_use", "redacted_thinking",
+				"web_search_tool_result", "web_fetch_tool_result", "code_execution_tool_result", "mcp_tool_result":
+				info.HasStreamOutput = true
+			case "text":
+				if block.GetText() != "" {
+					info.HasStreamOutput = true
+				}
+			case "thinking":
+				if block.Thinking != nil && *block.Thinking != "" {
+					info.HasStreamOutput = true
+				}
+			}
+		}
+	case "content_block_delta":
+		if delta := claudeResponse.Delta; delta != nil {
+			if (delta.Text != nil && *delta.Text != "") ||
+				(delta.Thinking != nil && *delta.Thinking != "") ||
+				(delta.PartialJson != nil && *delta.PartialJson != "") {
+				info.HasStreamOutput = true
+			}
+		}
+	}
+}
+
+func claudeResponseHasOutput(claudeResponse *dto.ClaudeResponse) bool {
+	if claudeResponse == nil {
+		return false
+	}
+	for i := range claudeResponse.Content {
+		block := &claudeResponse.Content[i]
+		switch block.Type {
+		case "text":
+			if block.GetText() != "" {
+				return true
+			}
+		case "thinking":
+			if block.Thinking != nil && *block.Thinking != "" {
+				return true
+			}
+		case "tool_use", "server_tool_use", "mcp_tool_use", "redacted_thinking",
+			"web_search_tool_result", "web_fetch_tool_result", "code_execution_tool_result", "mcp_tool_result":
+			return true
+		}
+	}
+	return false
+}
+
 func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) {
 	// Claude input_tokens excludes cache reads and writes, so a fully cached
 	// prompt reports zero input; the prompt is uncounted only when the total
 	// with cache is zero as well. Zero output is uncounted only when content
 	// was streamed, so a refusal before any output keeps its zeros.
+	hasOutput := claudeInfo.ResponseText.Len() > 0 ||
+		claudeInfo.ToolUseCount > 0 ||
+		(info != nil && (info.HasStreamOutput || info.HasResponseBillableToolCalls()))
+	upstreamStreamFailed := info != nil && info.StreamStatus != nil && info.StreamStatus.UpstreamFailed()
 	missingInputUsage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage).PromptTokens == 0
 	missingOutputUsage := claudeInfo.Usage.CompletionTokens == 0 && claudeInfo.ResponseText.Len() > 0
-	if missingInputUsage || missingOutputUsage || !claudeInfo.Done {
-		if common.DebugEnabled {
-			common.SysLog(common.LogText("claude response usage is not complete, maybe upstream error"))
+
+	if !hasOutput && !claudeInfo.Done && upstreamStreamFailed {
+		// Upstream aborted/reset the stream (e.g. HTTP/2 INTERNAL_ERROR or timeout)
+		// before message_delta without producing any output: waive billing rather
+		// than charging locally estimated or pre-generation header tokens.
+		claudeInfo.Usage = &dto.Usage{UsageSemantic: "anthropic"}
+		info.MarkEmptyResponse()
+	} else if !hasOutput && missingInputUsage && claudeInfo.Usage.CompletionTokens == 0 {
+		// Empty stream with zero upstream-reported tokens: do not fabricate input tokens.
+		if claudeInfo.Usage != nil {
+			claudeInfo.Usage.UsageSemantic = "anthropic"
 		}
-		// 只补缺失字段，不整份覆盖——保留 message_start 已拿到的 cache 字段
-		fallback := service.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-		// Each tool_use block costs about 40 output tokens beyond its name and JSON
-		// input (measured on Claude Haiku 4.5 and Sonnet 5 agent turns).
-		fallback.CompletionTokens += claudeInfo.ToolUseCount * 40
-		if missingOutputUsage ||
-			(!claudeInfo.Done && fallback.CompletionTokens > claudeInfo.Usage.CompletionTokens) {
-			claudeInfo.Usage.CompletionTokens = fallback.CompletionTokens
+		relayconvert.FinalizeClaudeStreamBillingUsage(claudeInfo)
+		info.MarkEmptyResponse()
+	} else {
+		if missingInputUsage || missingOutputUsage || !claudeInfo.Done {
+			if common.DebugEnabled {
+				common.SysLog(common.LogText("claude response usage is not complete, maybe upstream error"))
+			}
+			// 只补缺失字段，不整份覆盖——保留 message_start 已拿到的 cache 字段
+			fallback := service.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+			// Each tool_use block costs about 40 output tokens beyond its name and JSON
+			// input (measured on Claude Haiku 4.5 and Sonnet 5 agent turns).
+			fallback.CompletionTokens += claudeInfo.ToolUseCount * 40
+			if missingOutputUsage ||
+				(!claudeInfo.Done && fallback.CompletionTokens > claudeInfo.Usage.CompletionTokens) {
+				claudeInfo.Usage.CompletionTokens = fallback.CompletionTokens
+			}
+			if missingInputUsage {
+				claudeInfo.Usage.PromptTokens = fallback.PromptTokens
+			}
+			claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
 		}
-		if missingInputUsage {
-			claudeInfo.Usage.PromptTokens = fallback.PromptTokens
+		if claudeInfo.Usage != nil {
+			claudeInfo.Usage.UsageSemantic = "anthropic"
 		}
-		claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
+		relayconvert.FinalizeClaudeStreamBillingUsage(claudeInfo)
 	}
-	if claudeInfo.Usage != nil {
-		claudeInfo.Usage.UsageSemantic = "anthropic"
-	}
-	relayconvert.FinalizeClaudeStreamBillingUsage(claudeInfo)
 
 	if info.RelayFormat == types.RelayFormatClaude {
 		//
@@ -432,6 +508,9 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	}
 	if claudeResponse.Usage != nil {
 		recordClaudeServerToolUse(info, claudeResponse.Usage.ServerToolUse)
+	}
+	if !dto.HasClaudeUsageTokens(claudeResponse.Usage) && !claudeResponseHasOutput(&claudeResponse) && !info.HasResponseBillableToolCalls() {
+		info.MarkEmptyResponse()
 	}
 
 	service.IOCopyBytesGracefully(c, httpResp, responseData)

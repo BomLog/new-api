@@ -87,15 +87,8 @@ const isolatedSanitizeOptions = {
   FORCE_BODY: true,
 } satisfies Config
 
-function hardenIsolatedHtml(html: string): string {
-  if (typeof document === 'undefined') {
-    return html
-  }
-
-  const template = document.createElement('template')
-  template.innerHTML = html
-
-  template.content.querySelectorAll('a[target="_blank"]').forEach((link) => {
+function hardenExternalLinks(root: DocumentFragment): void {
+  root.querySelectorAll('a[target="_blank"]').forEach((link) => {
     const rel = new Set(
       link.getAttribute('rel')?.split(/\s+/).filter(Boolean) ?? []
     )
@@ -104,6 +97,28 @@ function hardenIsolatedHtml(html: string): string {
     rel.add('noreferrer')
     link.setAttribute('rel', [...rel].join(' '))
   })
+}
+
+function hardenInlineHtml(html: string): string {
+  if (typeof document === 'undefined') {
+    return html
+  }
+
+  const template = document.createElement('template')
+  template.innerHTML = html
+  hardenExternalLinks(template.content)
+  return template.innerHTML
+}
+
+function hardenIsolatedHtml(html: string): string {
+  if (typeof document === 'undefined') {
+    return html
+  }
+
+  const template = document.createElement('template')
+  template.innerHTML = html
+
+  hardenExternalLinks(template.content)
 
   template.content.querySelectorAll('iframe').forEach((frame) => {
     frame.removeAttribute('srcdoc')
@@ -128,7 +143,10 @@ function sanitizeHtmlContent(
     return hardenIsolatedHtml(html)
   }
 
-  return DOMPurify.sanitize(content)
+  const html = DOMPurify.sanitize(content, {
+    ADD_ATTR: ['target', 'rel'],
+  })
+  return hardenInlineHtml(html)
 }
 
 function syncDarkClass(wrapper: HTMLElement): void {
